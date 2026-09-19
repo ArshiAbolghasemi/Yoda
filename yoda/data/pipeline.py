@@ -31,7 +31,9 @@ class DataPipeline:
         processed_dir = root / storage.processed
         processed_dir.mkdir(parents=True, exist_ok=True)
 
-        raw_market = download_market(self.config.market, raw_market_dir)
+        raw_market = download_market(
+            self.config.market, raw_market_dir, self.config.download.workers
+        )
         market = preprocess_market(raw_market)
         market.to_parquet(processed_dir / "market.parquet", index=False)
         features = add_indicators(
@@ -47,6 +49,7 @@ class DataPipeline:
             self.config.market.start,
             self.config.market.end,
             raw_news_dir,
+            self.config.download.workers,
         )
         news = process_news(raw_news, self.config.market.assets, self.config.news)
         news.to_parquet(processed_dir / "news.parquet", index=False)

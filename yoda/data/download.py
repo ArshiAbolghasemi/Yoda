@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from tqdm.auto import tqdm
 
 from yoda.common.logger import logger
 from yoda.data.settings import MarketDataConfig, NewsConfig
@@ -52,7 +54,9 @@ def _download_news_page(url: str, headers: dict, params: dict) -> dict:
     return response.json()
 
 
-def download_market(config: MarketDataConfig, raw_dir: Path) -> pd.DataFrame:
+def download_market(
+    config: MarketDataConfig, raw_dir: Path, workers: int = 4
+) -> pd.DataFrame:
     """Download and preserve one raw Yahoo CSV per asset."""
     raw_dir.mkdir(parents=True, exist_ok=True)
     frames: list[pd.DataFrame] = []
@@ -63,26 +67,39 @@ def download_market(config: MarketDataConfig, raw_dir: Path) -> pd.DataFrame:
         config.start,
         config.end,
     )
-    for symbol, asset_type in config.assets.items():
-        try:
-            path = raw_dir / f"{symbol.replace('=', '_')}.csv"
-            if path.exists():
-                frame = pd.read_csv(path)
-                logger.info("market_download_reused asset=%s input=%s", symbol, path)
-            else:
-                frame = _download_market_asset(symbol, config.start, end_exclusive)
-            if frame.empty:
-                logger.warning("market_download_empty asset=%s", symbol)
-                continue
-            if isinstance(frame.columns, pd.MultiIndex):
-                frame.columns = frame.columns.get_level_values(0)
-            if not path.exists():
-                frame.to_csv(path)
-            frames.append(
-                frame.reset_index().assign(asset=symbol, asset_type=asset_type)
-            )
-        except KeyError, TypeError, ValueError, requests.RequestException:
-            logger.exception("market_download_failed asset=%s", symbol)
+    def load(symbol: str, asset_type: str) -> pd.DataFrame | None:
+        path = raw_dir / f"{symbol.replace('=', '_')}.csv"
+        if path.exists():
+            frame = pd.read_csv(path)
+            logger.info("market_download_reused asset=%s input=%s", symbol, path)
+        else:
+            frame = _download_market_asset(symbol, config.start, end_exclusive)
+        if frame.empty:
+            logger.warning("market_download_empty asset=%s", symbol)
+            return None
+        if isinstance(frame.columns, pd.MultiIndex):
+            frame.columns = frame.columns.get_level_values(0)
+        if not path.exists():
+            frame.to_csv(path)
+        return frame.reset_index().assign(asset=symbol, asset_type=asset_type)
+
+    with (
+        ThreadPoolExecutor(max_workers=workers) as executor,
+        tqdm(total=len(config.assets), desc="Market assets", unit="asset") as progress,
+    ):
+        futures = {
+            executor.submit(load, symbol, asset_type): symbol
+            for symbol, asset_type in config.assets.items()
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                frame = future.result()
+                if frame is not None:
+                    frames.append(frame)
+            except (KeyError, TypeError, ValueError, requests.RequestException):
+                logger.exception("market_download_failed asset=%s", symbol)
+            progress.update()
     if not frames:
         raise RuntimeError("Yahoo Finance returned no market data")
     result = pd.concat(frames, ignore_index=True)
@@ -101,7 +118,12 @@ def _batches(values: list[str], size: int) -> Iterable[list[str]]:
 
 
 def download_news(
-    config: NewsConfig, symbols: list[str], start: str, end: str, raw_dir: Path
+    config: NewsConfig,
+    symbols: list[str],
+    start: str,
+    end: str,
+    raw_dir: Path,
+    workers: int = 4,
 ) -> list[dict]:
     """Download paginated Alpaca headlines and preserve the exact JSON responses."""
     if not config.api_key or not config.api_secret:
@@ -119,7 +141,10 @@ def download_news(
         start,
         end,
     )
-    for batch_index, batch in enumerate(batches):
+    progress = tqdm(desc="News pages", unit="page")
+
+    def load_batch(batch_index: int, batch: list[str]) -> list[dict]:
+        items: list[dict] = []
         token = None
         page = 0
         reused = 0
@@ -144,16 +169,26 @@ def download_news(
                 path.write_text(
                     json.dumps(payload, ensure_ascii=False), encoding="utf-8"
                 )
-            for item in payload.get("news", []):
-                all_items[item.get("id", f"{batch_index}:{page}:{len(all_items)}")] = (
-                    item
-                )
+            progress.update()
+            items.extend(payload.get("news", []))
             token = payload.get("next_page_token")
             page += 1
             if not token:
                 break
         if reused:
             logger.info("news_download_reused batch=%d pages=%d", batch_index, reused)
+        return items
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = executor.map(
+                lambda indexed: load_batch(*indexed), enumerate(batches)
+            )
+            for batch_index, items in enumerate(results):
+                for item_index, item in enumerate(items):
+                    all_items[item.get("id", f"{batch_index}:{item_index}")] = item
+    finally:
+        progress.close()
     result = list(all_items.values())
     logger.info("news_download_done items=%d output=%s", len(result), raw_dir)
     return result

@@ -2330,6 +2330,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "requests" },
     { name = "tenacity" },
+    { name = "tqdm" },
     { name = "yfinance" },
 ]
 
@@ -2347,6 +2348,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "tenacity", specifier = ">=9.1.2" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "yfinance", specifier = ">=1.7.0" },
 ]
 

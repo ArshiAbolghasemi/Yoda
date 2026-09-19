@@ -95,6 +95,15 @@ class DatasetConfig:
 
 
 @dataclass(frozen=True)
+class DownloadConfig:
+    workers: int = 4
+
+    def __post_init__(self) -> None:
+        if self.workers < 1:
+            raise ValueError("Download workers must be positive")
+
+
+@dataclass(frozen=True)
 class StorageConfig:
     root: Path = Path("data")
     raw_market: str = "raw/market"
@@ -114,6 +123,7 @@ class DataConfig:
     news: NewsConfig
     indicators: IndicatorConfig
     dataset: DatasetConfig
+    download: DownloadConfig
     storage: StorageConfig
     targets: TargetConfig
 
@@ -158,6 +168,7 @@ def build_data_config(settings: Dynaconf) -> DataConfig:
         news=NewsConfig(**news),
         indicators=IndicatorConfig(**section("indicators")),
         dataset=DatasetConfig(**section("dataset")),
+        download=DownloadConfig(**section("download")),
         storage=StorageConfig(**storage),
         targets=TargetConfig(**targets),
     )

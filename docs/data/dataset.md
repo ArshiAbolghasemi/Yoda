@@ -49,9 +49,15 @@ configurable `data.news.fx_keywords` mapping for currencies, macroeconomic terms
 central banks.
 
 Each Yahoo asset request and Alpaca page request is retried up to three times with
-exponential backoff. After the final dataset is written successfully, both raw directories
-are deleted. Failed runs retain their raw files; the next run reuses existing asset CSVs
-and news pages, then continues from the first missing page rather than starting over.
+exponential backoff. Four worker threads download market assets and news batches in
+parallel by default; set `DATA__DOWNLOAD__WORKERS` to change the count. Pages within a
+news batch remain sequential because each page supplies the next token. After the final
+dataset is written successfully, both raw directories are deleted. Failed runs retain
+their raw files; the next run reuses existing asset CSVs and news pages, then continues
+from the first missing page rather than starting over.
+
+The command displays progress bars for completed market assets and processed news pages.
+Alpaca does not report a total page count, so the news bar shows a running page count.
 
 Headlines are whitespace-normalized and deduplicated. News published at or after the
 configured New York market close is assigned to the next available trading session.
