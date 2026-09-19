@@ -101,12 +101,12 @@ Each final row contains:
 
 ## Assets
 
-The default dataset covers 37 instruments:
+The default dataset covers 36 instruments:
 
 - Bitcoin: `BTC-USD`;
 - foreign exchange: `EURUSD=X`, `GBPUSD=X`, `USDJPY=X`, `AUDUSD=X`, `USDCAD=X`,
   and `USDCHF=X`; and
-- equities: the 30 Dow Jones component symbols configured in `yoda/data/settings.py`.
+- equities: 29 Dow Jones component symbols configured in `yoda/data/settings.py`.
 
 The constituents are configuration defaults, not a historical membership record. Change
 them with `DATA__MARKET__BITCOIN`, `DATA__MARKET__FX`, or

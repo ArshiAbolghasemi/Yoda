@@ -38,7 +38,6 @@ DOW_30 = (
     "UNH",
     "V",
     "VZ",
-    "WBA",
     "WMT",
 )
 DEFAULT_FX = ("EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X")
