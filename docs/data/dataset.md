@@ -50,7 +50,8 @@ central banks.
 
 Each Yahoo asset request and Alpaca page request is retried up to three times with
 exponential backoff. After the final dataset is written successfully, both raw directories
-are deleted. Failed runs retain their raw files for diagnosis.
+are deleted. Failed runs retain their raw files; the next run reuses existing asset CSVs
+and news pages, then continues from the first missing page rather than starting over.
 
 Headlines are whitespace-normalized and deduplicated. News published at or after the
 configured New York market close is assigned to the next available trading session.

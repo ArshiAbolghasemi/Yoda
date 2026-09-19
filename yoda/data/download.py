@@ -65,13 +65,19 @@ def download_market(config: MarketDataConfig, raw_dir: Path) -> pd.DataFrame:
     )
     for symbol, asset_type in config.assets.items():
         try:
-            frame = _download_market_asset(symbol, config.start, end_exclusive)
+            path = raw_dir / f"{symbol.replace('=', '_')}.csv"
+            if path.exists():
+                frame = pd.read_csv(path)
+                logger.info("market_download_reused asset=%s input=%s", symbol, path)
+            else:
+                frame = _download_market_asset(symbol, config.start, end_exclusive)
             if frame.empty:
                 logger.warning("market_download_empty asset=%s", symbol)
                 continue
             if isinstance(frame.columns, pd.MultiIndex):
                 frame.columns = frame.columns.get_level_values(0)
-            frame.to_csv(raw_dir / f"{symbol.replace('=', '_')}.csv")
+            if not path.exists():
+                frame.to_csv(path)
             frames.append(
                 frame.reset_index().assign(asset=symbol, asset_type=asset_type)
             )
@@ -116,6 +122,7 @@ def download_news(
     for batch_index, batch in enumerate(batches):
         token = None
         page = 0
+        reused = 0
         while True:
             params = {
                 "start": f"{start}T00:00:00Z",
@@ -128,10 +135,15 @@ def download_news(
                 params["symbols"] = ",".join(batch)
             if token:
                 params["page_token"] = token
-            payload = _download_news_page(config.base_url, headers, params)
-            (raw_dir / f"batch_{batch_index:03d}_page_{page:05d}.json").write_text(
-                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-            )
+            path = raw_dir / f"batch_{batch_index:03d}_page_{page:05d}.json"
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                reused += 1
+            else:
+                payload = _download_news_page(config.base_url, headers, params)
+                path.write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
             for item in payload.get("news", []):
                 all_items[item.get("id", f"{batch_index}:{page}:{len(all_items)}")] = (
                     item
@@ -140,6 +152,8 @@ def download_news(
             page += 1
             if not token:
                 break
+        if reused:
+            logger.info("news_download_reused batch=%d pages=%d", batch_index, reused)
     result = list(all_items.values())
     logger.info("news_download_done items=%d output=%s", len(result), raw_dir)
     return result
