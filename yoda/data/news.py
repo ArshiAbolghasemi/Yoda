@@ -73,7 +73,7 @@ def process_news(
 def align_and_aggregate_news(
     news: pd.DataFrame, market: pd.DataFrame, separator: str
 ) -> pd.DataFrame:
-    """Move weekend/after-close news to the first following trading day, then aggregate."""
+    """Move weekend/after-close news to the next trading day, then aggregate."""
     if news.empty:
         return pd.DataFrame(columns=["date", "asset", "headlines", "news_count"])
     aligned: list[pd.DataFrame] = []

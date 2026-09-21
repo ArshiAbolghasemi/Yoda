@@ -67,6 +67,7 @@ def download_market(
         config.start,
         config.end,
     )
+
     def load(symbol: str, asset_type: str) -> pd.DataFrame | None:
         path = raw_dir / f"{symbol.replace('=', '_')}.csv"
         if path.exists():
@@ -97,7 +98,7 @@ def download_market(
                 frame = future.result()
                 if frame is not None:
                     frames.append(frame)
-            except (KeyError, TypeError, ValueError, requests.RequestException):
+            except KeyError, TypeError, ValueError, requests.RequestException:
                 logger.exception("market_download_failed asset=%s", symbol)
             progress.update()
     if not frames:
