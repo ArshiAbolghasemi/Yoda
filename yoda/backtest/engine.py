@@ -24,7 +24,7 @@ from yoda.common.alignment import AlignedPanel
 from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer, Gate, RiskParamPolicy
 from yoda.config.settings import Config
-from yoda.pipeline.stack import AllocationStack, build_stack
+from yoda.stack import AllocationStack, build_stack
 from yoda.tailvoi.baselines import EqualWeightGate
 
 GateFactory = Callable[[AllocationStack, np.ndarray], Gate]
@@ -99,6 +99,9 @@ def run_backtest(
         weights = stack.equal_weight_book()
         stats: dict = {}
         gate_weights: dict[str, float] = {}
+        delta_hat: dict[str, float] = {}
+        params = policy.act(stack.state(int(fold.test[0]), weights)[0])
+        value = 1.0
         last = len(panel.dates) - 1
         for step, position in enumerate(fold.test):
             if position >= last:
@@ -111,23 +114,35 @@ def run_backtest(
                 weights = stack.allocate(state, scen, params)
                 stats = state.tail_stats
                 gate_weights = gate.g
+                delta_hat = gate.delta_hat
             turnover = float(np.abs(weights - previous).sum())
             cost = turnover * backtest.cost_bps / 1e4
             realized = panel.returns[position + 1][stack.universe]
             port_return = float(weights @ realized) - cost
+            value *= 1.0 + port_return
 
             rows_out.append(
                 {
                     "date": panel.dates[position + 1],
                     "fold": fold.index,
+                    "rebalanced": bool(rebalance),
                     "port_return": port_return,
+                    "portfolio_value": value,
                     "turnover": turnover,
                     "cost": cost,
                     "realized_cvar": float(stats.get("cvar", np.nan)),
                     "realized_var": float(stats.get("var", np.nan)),
+                    "nu": float(stats.get("nu", np.nan)),
+                    "scenario_vol": float(stats.get("vol", np.nan)),
+                    # The risk parameters the policy chose - static rule or SAC.
+                    "rp_lam": params.lam,
+                    "rp_budget": params.budget,
+                    "rp_turnover_penalty": params.turnover_penalty,
+                    "rp_alpha": params.alpha,
                     "cash": 0.0,
                     "gross": 1.0,
-                    **{f"gate_g_{name}": value for name, value in gate_weights.items()},
+                    **{f"gate_g_{name}": share for name, share in gate_weights.items()},
+                    **{f"tail_voi_{name}": share for name, share in delta_hat.items()},
                 }
             )
             books.extend(
@@ -135,9 +150,14 @@ def run_backtest(
                     "date": panel.dates[position],
                     "asset": asset,
                     "weight": float(weight),
+                    "weight_prev": float(before),
+                    "weight_change": float(weight - before),
                 }
-                for asset, weight in zip(
-                    np.asarray(panel.assets)[stack.universe], weights, strict=True
+                for asset, weight, before in zip(
+                    np.asarray(panel.assets)[stack.universe],
+                    weights,
+                    previous,
+                    strict=True,
                 )
             )
             weights = _drift(weights, realized)
@@ -154,7 +174,19 @@ def run_backtest(
         "pipeline": pipeline,
         "label": label or run_id,
         "gate": gate_name,
+        "sources": list(stack.sources),
+        "backends": {
+            channel: research.specialists.backend(channel)
+            for channel in stack.sources
+            if channel != "news"
+        },
+        "synthetic": research.jev.synthetic,
         "news_backend": research.news.backend,
+        "specialist_models": {
+            channel: getattr(research.specialists, f"{channel}_model", None)
+            for channel in stack.sources
+        },
+        "target_horizon": research.panel.target_horizon,
         "policy": getattr(policy, "name", type(policy).__name__),
         "alpha": alpha,
         "splits": research.split.ranges,

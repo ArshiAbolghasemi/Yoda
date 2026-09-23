@@ -40,16 +40,18 @@ else.
 |---|---|---|
 | [technical-specialist.md](technical-specialist.md) | Directional view from the 60 causal indicators | `fused_μ` |
 | [volatility-specialist.md](volatility-specialist.md) | Magnitude view — how wide the distribution is | the copula conditioning |
-| [news-specialist.md](news-specialist.md) | Headlines → numbers, via a LangGraph LLM agent or frozen local encoders | `fused_μ` |
+| [news-specialist.md](news-specialist.md) | Headlines → numbers, through OpenJev | `fused_μ` |
+| [openjev-specialists.md](openjev-specialists.md) | Optional OpenJev 27B backend for any channel — calibrated probabilities | per channel |
 | [tail-voi-gate.md](tail-voi-gate.md) | **The centerpiece.** What each source is worth *in the tail* | decides `g` |
 | [risk-policy.md](risk-policy.md) | **The seam.** Chooses `(λ, B, c)` — static rule or SAC agent | drives the solver |
+| [cio-agent.md](cio-agent.md) | Decides whom to trust *and* the risk stance — fills the gate and policy sockets at once | both |
 
 ### Supporting components
 
 | Component | Role |
 |---|---|
 | [tail-model.md](tail-model.md) | Student-t copula: the joint distribution the views are expressed against |
-| [optimizer.md](optimizer.md) | DRO-CVaR allocator, plus the classical baselines |
+| [optimizer.md](optimizer.md) | The DRO-CVaR allocator and its robustification modes |
 
 ### Procedures
 
@@ -57,6 +59,7 @@ else.
 |---|---|
 | [training.md](training.md) | The complete training procedure, stage by stage, both pipelines |
 | [inference.md](inference.md) | The walk-forward loop, artifacts, offline scoring, live checklist |
+| [experiments.md](experiments.md) | Every baseline and ablation, what each isolates, and how to read the results |
 
 ## Contracts
 
@@ -101,7 +104,7 @@ aligned tensor set on one calendar.
 | `available` | `(T, N)` bool | listed, priced, past per-asset warm-up |
 | `features['technical']` | `(T, N, 60)` | the 60 causal indicators |
 | `features['volatility']` | `(T, N, 8)` | 5 band/ATR columns + 3 realized-vol windows |
-| `features['news']` | `(T, N, 22)` | built separately; see [news-specialist.md](news-specialist.md) |
+| `features['news']` | `(T, N, 7)` | OpenJev probabilities; see [news-specialist.md](news-specialist.md) |
 | `targets` | `(T, N)` | forward return over `PANEL__TARGET_HORIZON` |
 
 Default panel: **2018-01-02 → 2026-09-18, 2190 rows, 36 assets, 99.3% available.**
@@ -125,7 +128,7 @@ Default panel: **2018-01-02 → 2026-09-18, 2190 rows, 36 assets, 99.3% availabl
 
 Specialists, gate, copula and optimizer each have their own page — see
 [the components](#the-components) below. The object that wires them together is
-`yoda/pipeline/stack.py`:
+`yoda/stack.py`:
 
 ```python
 stack = build_stack(panel, config, train_rows, gate)  # fits on train_rows only
@@ -162,9 +165,9 @@ This is enforced structurally, not by convention:
 | `yoda.common.types` | every shared contract |
 | `yoda.common.alignment` | one calendar, returns, feature cubes, availability |
 | `yoda.specialists` | the three view-forming agents |
-| `yoda.specialists.news_agent` | OpenAI-compatible client, LangGraph workflow, PIT cache |
+| `yoda.specialists.jev` | OpenJev client, typed decision tasks, point-in-time cache |
 | `yoda.copula` | Student-t tail model, conditional scenarios, stress paths |
-| `yoda.optimizer` | DRO-CVaR solver + classical baseline allocators |
+| `yoda.optimizer` | The DRO-CVaR solver |
 | `yoda.tailvoi` | counterfactual Δ generator, the learned gate, three baseline gates |
 | `yoda.policy` | **the seam** — `StaticRiskPolicy`, `RLRiskPolicy` |
 | `yoda.env`, `yoda.rl` | Gym environment and SAC training (RL pipeline only) |

@@ -1,42 +1,78 @@
-"""The baselines and ablations the paper depends on (spec section 8).
+"""The baseline, backend and ablation matrix.
 
-Every arm runs on the *same* walk-forward splits, the same panel and the same
-scoring intervals, so the comparison table is apples to apples by construction.
+Every arm runs on the same panel, the same walk-forward splits, the same
+transaction costs and the same scoring intervals, so a difference between two
+rows is a difference in the thing being varied and nothing else.
 
-Four families:
-
-``gate`` (headline)
-    Tail-VoI vs Accuracy vs Attention vs EqualWeight, everything else fixed.
-``system``
-    Equal-Weight, Mean-Variance, Risk-Parity, static-CVaR (the DRO ball switched
-    off) and a vol-targeted static policy.
+Families
+--------
+``gate``
+    Tail-VoI vs Accuracy vs Attention vs EqualWeight. Does gating on *tail
+    value* beat gating on accuracy, on learned attention, and on nothing?
+``optimizer``
+    The DRO robustification itself: Wasserstein, moment-based, or off. What is
+    the distributional robustness actually worth?
 ``policy``
-    the static risk policy vs the RL risk controller, same gate.
-``news``
-    ``no-news`` vs ``encoder`` vs ``llm_agent``, same gate and optimizer. The news
-    channel is the thinnest one - FX headlines are keyword-matched - so the point
-    is to let the gate decide whether ``z_news`` earns its place and to report it
-    either way. ``encoder`` vs ``llm_agent`` doubles as the LLM leakage check.
+    Static risk rule vs the SAC controller, same gate.
+``openjev``
+    Conventional specialists versus OpenJev probabilistic specialists, one
+    channel at a time and in every combination. **The primary research
+    question.**
+``sources``
+    Agent-removal. Each arm *deletes* a channel from the Tail-VoI input rather
+    than zeroing it, so the gate renormalises over what remains and the measured
+    effect is that information's marginal contribution.
+``horizon``
+    The same stack at 1, 5, 10 and 20 trading-day prediction/rebalance horizons.
+
+Nothing here assumes OpenJev helps. The matrix is built so a negative result is
+as readable as a positive one, and every arm is persisted either way.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import itertools
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
+from yoda.backtest.artifacts import load_run
 from yoda.common.alignment import AlignedPanel, build_panel
 from yoda.common.logger import logger
-from yoda.common.types import DROCVaROptimizer
+from yoda.common.types import SOURCES, DROCVaROptimizer
 from yoda.config.settings import Config
+from yoda.evaluation.intervals import resolve, slice_ledger
 from yoda.evaluation.report import Evaluation, evaluate
-from yoda.optimizer.classical import EqualWeight, MeanVariance, RiskParity
 from yoda.pipeline.tail_voli_risk import run_tail_voli_risk
 from yoda.pipeline.tail_voli_risk_rl import run_tail_voli_risk_rl
+from yoda.stack import resolve_features
 
-FAMILIES: tuple[str, ...] = ("gate", "system", "policy", "news")
+FAMILIES: tuple[str, ...] = (
+    "gate",
+    "optimizer",
+    "policy",
+    "openjev",
+    "sources",
+    "horizon",
+)
+SUMMARY_COLUMNS: tuple[str, ...] = (
+    "experiment",
+    "tech_backend",
+    "vol_backend",
+    "news_backend",
+    "return",
+    "sharpe",
+    "sortino",
+    "calmar",
+    "max_dd",
+    "cvar",
+    "turnover",
+)
 
 
 @dataclass(frozen=True)
@@ -45,103 +81,309 @@ class Arm:
     label: str
     family: str
     gate: str = "tailvoi"
-    rl: bool = False  # run the RL pipeline instead of the static one
-    news_backend: str | None = None  # None = leave the configured backend alone
+    rl: bool = False
+    policy: str = "static"
+    sources: tuple[str, ...] | None = None  # None keeps the configured set
+    backends: dict[str, str] = field(default_factory=dict)  # channel -> backend
+    horizon: int | None = None
     optimizer: Callable[[], DROCVaROptimizer] | None = None
-    overrides: dict = field(default_factory=dict)  # research-config replacements
+    overrides: dict = field(default_factory=dict)
+
+
+def _jev_arms() -> list[Arm]:
+    """Conventional specialists versus OpenJev, one channel at a time.
+
+    Section 10's comparison. The conventional arm uses the numeric indicator
+    cubes and the fitted heads; every OpenJev arm swaps one or more channels to
+    calibrated probabilities and changes nothing else.
+    """
+    conventional = dict.fromkeys(("technical", "volatility"), "numeric")
+    arms = [
+        Arm(
+            "jev_none",
+            "Conventional",
+            "openjev",
+            backends={**conventional, "news": "none"},
+        )
+    ]
+    for size in (1, 2, 3):
+        for subset in itertools.combinations(SOURCES, size):
+            backends = {**conventional, "news": "none"}
+            for channel in subset:
+                backends[channel] = "jev"
+            arms.append(
+                Arm(
+                    run_id="jev_" + "_".join(subset),
+                    label="OpenJev " + "+".join(subset),
+                    family="openjev",
+                    backends=backends,
+                )
+            )
+    return arms
+
+
+def _source_arms() -> list[Arm]:
+    """All agents, each single removal, and every surviving subset."""
+    arms = [Arm("src_all", "All agents", "sources", sources=SOURCES)]
+    for dropped in SOURCES:
+        arms.append(
+            Arm(
+                run_id=f"src_without_{dropped}",
+                label=f"Without {dropped}",
+                family="sources",
+                sources=tuple(name for name in SOURCES if name != dropped),
+            )
+        )
+    for size in (1, 2):
+        for subset in itertools.combinations(SOURCES, size):
+            run_id = "src_only_" + "_".join(subset)
+            if any(arm.run_id == run_id for arm in arms):
+                continue
+            arms.append(
+                Arm(
+                    run_id=run_id,
+                    label=" + ".join(subset) + " only",
+                    family="sources",
+                    sources=subset,
+                )
+            )
+    return arms
 
 
 def default_arms(gate: str = "tailvoi") -> list[Arm]:
     return [
-        # -- headline gate ablation ------------------------------------------
+        # -- headline gate ablation -------------------------------------------
         Arm("gate_tailvoi", "TailVoI", "gate", gate="tailvoi"),
         Arm("gate_accuracy", "Accuracy", "gate", gate="accuracy"),
         Arm("gate_attention", "Attention", "gate", gate="attention"),
         Arm("gate_equal", "EqualWeight", "gate", gate="equal_weight"),
-        # -- classical system baselines ---------------------------------------
+        Arm("gate_cio", "CIO agent", "gate", gate="cio"),
+        # -- what the distributional robustness is worth -------------------------
+        Arm("opt_wasserstein", "Wasserstein DRO", "optimizer", gate=gate),
         Arm(
-            "sys_equal_weight",
-            "1/N",
-            "system",
-            gate="equal_weight",
-            optimizer=EqualWeight,
+            "opt_moment",
+            "Moment DRO",
+            "optimizer",
+            gate=gate,
+            overrides={"optimizer": {"dro": "moment"}},
         ),
         Arm(
-            "sys_mean_variance",
-            "Mean-Variance",
-            "system",
-            gate="equal_weight",
-            optimizer=MeanVariance,
-        ),
-        Arm(
-            "sys_risk_parity",
-            "Risk-Parity",
-            "system",
-            gate="equal_weight",
-            optimizer=RiskParity,
-        ),
-        Arm(
-            "sys_static_cvar",
-            "Static CVaR",
-            "system",
-            gate="equal_weight",
+            "opt_plain_cvar",
+            "Plain CVaR",
+            "optimizer",
+            gate=gate,
             overrides={"optimizer": {"dro": "none"}},
         ),
+        # -- static policy vs RL controller -------------------------------------
+        Arm("policy_static", "Static policy", "policy", gate=gate),
+        Arm("policy_rl", "RL policy", "policy", gate=gate, rl=True),
+        Arm("policy_cio", "CIO policy", "policy", gate=gate, policy="cio"),
         Arm(
-            "sys_vol_target",
-            "Vol-target",
-            "system",
-            gate="equal_weight",
+            "policy_vol_target",
+            "Vol-target policy",
+            "policy",
+            gate=gate,
             overrides={"static_policy": {"vol_target": 0.02}},
         ),
-        # -- static policy vs RL controller -------------------------------------
-        Arm("tail_voli_risk", "Static policy", "policy", gate=gate),
-        Arm("tail_voli_risk_rl", "RL policy", "policy", gate=gate, rl=True),
-        # -- news channel -------------------------------------------------------
-        Arm("news_none", "no-news", "news", gate=gate, news_backend="none"),
-        Arm("news_encoder", "encoder", "news", gate=gate, news_backend="encoder"),
-        Arm("news_llm", "llm_agent", "news", gate=gate, news_backend="llm_agent"),
+        Arm("cio_full", "CIO gate + policy", "policy", gate="cio", policy="cio"),
+        # -- conventional vs OpenJev specialists ---------------------------------
+        *_jev_arms(),
+        # -- agent-removal ablations --------------------------------------------
+        *_source_arms(),
+        # -- prediction / rebalance horizon ---------------------------------------
+        *[
+            Arm(f"horizon_{days}d", f"{days}-day horizon", "horizon", horizon=days)
+            for days in (1, 5, 10, 20)
+        ],
     ]
 
 
 def _apply(config: Config, arm: Arm) -> Config:
+    """Rewrite the config for one arm. Nothing else in the run may differ."""
     research = config.research
-    if arm.news_backend is not None:
+
+    if arm.sources is not None:
         research = dataclasses.replace(
-            research, news=dataclasses.replace(research.news, backend=arm.news_backend)
+            research, tailvoi=dataclasses.replace(research.tailvoi, sources=arm.sources)
         )
-        sources = tuple(
-            name
-            for name in research.tailvoi.sources
-            if name != "news" or arm.news_backend != "none"
-        )
-        if "news" not in sources and arm.news_backend != "none":
-            sources = (*sources, "news")
+        if "news" not in arm.sources:
+            research = dataclasses.replace(
+                research, news=dataclasses.replace(research.news, backend="none")
+            )
+
+    changes = {
+        f"{channel}_backend": backend
+        for channel, backend in arm.backends.items()
+        if channel != "news"
+    }
+    if changes:
         research = dataclasses.replace(
-            research, tailvoi=dataclasses.replace(research.tailvoi, sources=sources)
+            research, specialists=dataclasses.replace(research.specialists, **changes)
         )
-    for section, changes in arm.overrides.items():
+    if "news" in arm.backends:
         research = dataclasses.replace(
             research,
-            **{section: dataclasses.replace(getattr(research, section), **changes)},
+            news=dataclasses.replace(research.news, backend=arm.backends["news"]),
+        )
+        if arm.backends["news"] == "none":
+            research = dataclasses.replace(
+                research,
+                tailvoi=dataclasses.replace(
+                    research.tailvoi,
+                    sources=tuple(c for c in research.tailvoi.sources if c != "news"),
+                ),
+            )
+
+    if arm.horizon is not None:
+        research = dataclasses.replace(
+            research,
+            panel=dataclasses.replace(research.panel, target_horizon=arm.horizon),
+            backtest=dataclasses.replace(research.backtest, rebalance_days=arm.horizon),
+        )
+
+    for section, values in arm.overrides.items():
+        research = dataclasses.replace(
+            research,
+            **{section: dataclasses.replace(getattr(research, section), **values)},
         )
     return dataclasses.replace(config, research=research)
 
 
-def _features(
+def fingerprint(config: Config, arm: Arm) -> tuple:
+    """Everything that can change a run's numbers.
+
+    Several arms are legitimately the same experiment seen from different
+    families - the shared control appears once per family, and with exactly
+    three sources "without technical" and "volatility + news only" are the same
+    set. They are worth reporting under both names but not worth *running*
+    twice, so execution is deduplicated on this key and the summary aliases the
+    extra labels onto the one run.
+    """
+    research = config.research
+    return (
+        arm.gate,
+        arm.policy,
+        arm.rl,
+        research.tailvoi.sources,
+        research.panel.target_horizon,
+        research.backtest.rebalance_days,
+        research.news.backend,
+        arm.optimizer.__name__ if arm.optimizer else "DROCVaR",
+        research.optimizer.dro,
+        research.static_policy.vol_target,
+    )
+
+
+def _backend_key(config: Config) -> tuple:
+    research = config.research
+    return (
+        research.tailvoi.sources,
+        research.news.backend,
+        tuple(
+            (channel, research.specialists.backend(channel))
+            for channel in research.tailvoi.sources
+            if channel != "news"
+        ),
+    )
+
+
+def _shared_features(
     config: Config, panel: AlignedPanel, cache: dict
 ) -> dict[str, np.ndarray]:
-    """Build each news backend's cube at most once and share it across arms."""
-    backend = config.research.news.backend
-    features = dict(panel.features)
-    if backend == "none":
-        return features
-    if backend not in cache:
-        from yoda.specialists.news import build_news_features
+    """Build each expensive cube once and share it across every arm that uses it."""
+    key = (_backend_key(config), panel.horizon, len(panel.dates))
+    if key not in cache:
+        cache[key] = resolve_features(panel, config)
+    return dict(cache[key])
 
-        cache[backend], _ = build_news_features(panel, config)
-    features["news"] = cache[backend]
-    return features
+
+def summary_table(
+    config: Config,
+    run_ids: list[str],
+    interval: str = "test",
+    aliases: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """The headline comparison, one row per arm.
+
+    ``aliases`` maps a label that was not run onto the run whose configuration
+    it duplicates, so every requested arm appears in the table exactly once
+    even though identical configurations executed only once.
+    """
+    evaluation = evaluate(config, run_ids, make_plots=False)
+    table = evaluation.tables.get(interval)
+    if table is None:
+        table = evaluation.overall()
+    root = config.path(config.research.backtest.runs)
+
+    rows = []
+    wanted = [(run_id, None) for run_id in run_ids]
+    wanted += [(canonical, label) for label, canonical in (aliases or {}).items()]
+    for run_id, alias_label in wanted:
+        meta_path = root / run_id / "run_meta.json"
+        if not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text())
+        label = meta.get("label", run_id)
+        if label not in table.index:
+            continue
+        row = table.loc[label]
+        backends = meta.get("backends", {})
+        rows.append(
+            {
+                "experiment": alias_label or label,
+                "tech_backend": backends.get("technical", "-"),
+                "vol_backend": backends.get("volatility", "-"),
+                "news_backend": meta.get("news_backend", "-"),
+                "return": row["ARR"],
+                "sharpe": row["Sharpe"],
+                "sortino": row["Sortino"],
+                "calmar": row["Calmar"],
+                "max_dd": row["MaxDD"],
+                "cvar": row["CVaR"],
+                "turnover": row["Turnover"],
+            }
+        )
+    return pd.DataFrame(rows, columns=list(SUMMARY_COLUMNS))
+
+
+def gate_weights_by_regime(config: Config, run_ids: list[str]) -> pd.DataFrame:
+    """Average Tail-VoI gate weight per channel, per named interval.
+
+    This answers "does the volatility specialist earn more Tail-VoI during
+    stress?" — gate weights are persisted at every rebalance, so the regime
+    split is a groupby rather than another backtest.
+    """
+    root = config.path(config.research.backtest.runs)
+    rows = []
+    for run_id in run_ids:
+        try:
+            run = load_run(root, run_id)
+        except FileNotFoundError:
+            continue
+        columns = [c for c in run.ledger.columns if c.startswith("gate_g_")]
+        if not columns:
+            continue
+        intervals = resolve(
+            run.ledger, config.research.split, config.research.evaluation
+        )
+        for interval in intervals:
+            piece = slice_ledger(run.ledger, interval)
+            if piece.empty:
+                continue
+            record = {
+                "run": run.label,
+                "interval": interval.name,
+                "kind": interval.kind,
+                "n": len(piece),
+            }
+            record.update(
+                {
+                    column.removeprefix("gate_g_"): float(piece[column].mean())
+                    for column in columns
+                }
+            )
+            rows.append(record)
+    return pd.DataFrame(rows)
 
 
 def run_experiments(
@@ -155,27 +397,47 @@ def run_experiments(
     """Run every selected arm and score them all on identical intervals."""
     panel = panel or build_panel(config)
     selected = [arm for arm in (arms or default_arms()) if arm.family in families]
-    cache: dict[str, np.ndarray] = {}
+    cache: dict = {}
     completed: list[str] = []
+    executed: dict[tuple, str] = {}
+    aliases: dict[str, str] = {}
+    panels: dict[int, AlignedPanel] = {panel.horizon: panel}
 
     for arm in selected:
         arm_config = _apply(config, arm)
+        mark = fingerprint(arm_config, arm)
+        if mark in executed:
+            aliases[arm.label] = executed[mark]
+            logger.info(
+                "arm_aliased id=%s same_configuration_as=%s", arm.run_id, executed[mark]
+            )
+            continue
+        horizon = arm_config.research.panel.target_horizon
+        if horizon not in panels:
+            panels[horizon] = build_panel(arm_config)
+        arm_panel = panels[horizon]
         run = run_tail_voli_risk_rl if arm.rl else run_tail_voli_risk
         logger.info(
-            "arm_start id=%s family=%s label=%s", arm.run_id, arm.family, arm.label
+            "arm_start id=%s family=%s label=%s sources=%s",
+            arm.run_id,
+            arm.family,
+            arm.label,
+            ",".join(arm_config.research.tailvoi.sources),
         )
         try:
             run(
                 arm_config,
                 run_id=arm.run_id,
                 gate=arm.gate,
-                panel=panel,
-                features=_features(arm_config, panel, cache),
+                panel=arm_panel,
+                features=_shared_features(arm_config, arm_panel, cache),
                 optimizer=arm.optimizer() if arm.optimizer else None,
                 label=arm.label,
                 make_plots=False,
+                **({} if arm.rl else {"policy": arm.policy}),
             )
             completed.append(arm.run_id)
+            executed[mark] = arm.run_id
         except Exception as error:  # noqa: BLE001 - one bad arm must not sink the sweep
             if not skip_failures:
                 raise
@@ -183,5 +445,19 @@ def run_experiments(
 
     if not completed:
         raise RuntimeError("Every experiment arm failed; see the log above")
-    logger.info("experiments_done arms=%d", len(completed))
-    return evaluate(config, completed, panel=panel, title="TailRiskFlow baselines")
+
+    root: Path = config.path(config.research.backtest.runs)
+    root.mkdir(parents=True, exist_ok=True)
+    summary_table(config, completed, aliases=aliases).to_csv(
+        root / "summary.csv", index=False
+    )
+    gate_weights_by_regime(config, completed).to_csv(
+        root / "gate_weights_by_regime.csv", index=False
+    )
+    logger.info(
+        "experiments_done ran=%d aliased=%d summary=%s",
+        len(completed),
+        len(aliases),
+        root / "summary.csv",
+    )
+    return evaluate(config, completed, panel=panel, title="TailRiskFlow experiments")

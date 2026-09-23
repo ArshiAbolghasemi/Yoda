@@ -32,11 +32,34 @@ def test_volatility_view_is_non_negative(stack, train_rows):
     assert (output.mu_hat["volatility"] >= 0).all()
 
 
-def test_specialists_tolerate_the_all_nan_fx_volume_columns(stack, train_rows):
-    """FX volume indicators are NaN by design; encoding must not blow up."""
-    features = stack.features["technical"][int(train_rows[-1])][stack.universe]
-    assert np.isnan(features).any()
-    assert np.isfinite(stack.specialists["technical"].encode(features)).all()
+def test_missing_fx_volume_is_sent_as_null_not_a_sentinel(panel):
+    """FX volume indicators are NaN by design.
+
+    They no longer reach a specialist - the specialists read OpenJev
+    probabilities - but they are still part of the *state* the decision model
+    is shown, and a NaN there must travel as JSON null. Encoding it as 0.0
+    would tell the model "volume was flat" when the truth is "no volume data".
+    """
+    from yoda.specialists.jev.features import _rounded
+
+    names = panel.feature_names["technical"]
+    obv = names.index("obv")
+    fx = [i for i, kind in enumerate(panel.asset_types) if kind == "fx"]
+    assert np.isnan(panel.features["technical"][:, fx, obv]).all()
+    assert _rounded(float("nan")) is None
+    assert _rounded(1.23456789) == 1.234568  # 6dp keeps the key stable
+
+
+def test_representations_are_the_same_width_across_channels(stack, train_rows):
+    """The gate sums z across channels, so every channel must be z_dim wide.
+
+    The OpenJev cubes differ in width (13 technical, 15 volatility, 27 news),
+    so this only holds because encode() pads narrow channels and z_dim is set
+    wide enough that none is truncated.
+    """
+    output = stack.specialist_output(int(train_rows[-1]))
+    widths = {name: z.shape[-1] for name, z in output.z.items()}
+    assert set(widths.values()) == {stack.config.research.specialists.z_dim}
 
 
 # ---- copula --------------------------------------------------------------

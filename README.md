@@ -39,16 +39,18 @@ weights. Then read whichever component you are working on.
 |---|---|
 | [technical-specialist.md](docs/architecture/technical-specialist.md) | Directional view from the 60 causal indicators; the shared specialist pipeline and why FX NaNs are masked, not imputed |
 | [volatility-specialist.md](docs/architecture/volatility-specialist.md) | Magnitude view, and why it conditions the copula instead of entering `μ` |
-| [news-specialist.md](docs/architecture/news-specialist.md) | The LangGraph LLM news agent in full — graph, prompts, point-in-time cache, the three backends, cost |
+| [news-specialist.md](docs/architecture/news-specialist.md) | The news channel — OpenJev probabilities in, directional view out |
 | [tail-voi-gate.md](docs/architecture/tail-voi-gate.md) | **The centerpiece** — counterfactual Δ targets, the learned gate, and the three baseline gates it must beat |
 | [risk-policy.md](docs/architecture/risk-policy.md) | **The seam** — the static rule, the SAC controller, the environment and its reward |
+| [openjev-specialists.md](docs/architecture/openjev-specialists.md) | The optional OpenJev 27B backend — serving, decision tasks, caching, calibration metrics |
+| [cio-agent.md](docs/architecture/cio-agent.md) | The CIO agent — sets the gate *and* the risk stance in one decision, and why it never emits weights |
 
 **Supporting components**
 
 | Document | What it covers |
 |---|---|
 | [tail-model.md](docs/architecture/tail-model.md) | Student-t copula: fitting, conditioning, sampling, stress paths |
-| [optimizer.md](docs/architecture/optimizer.md) | The DRO-CVaR program, its robustification modes, and the classical baselines |
+| [optimizer.md](docs/architecture/optimizer.md) | The DRO-CVaR program and its robustification modes |
 
 **Procedures**
 
@@ -56,6 +58,7 @@ weights. Then read whichever component you are working on.
 |---|---|
 | [training.md](docs/architecture/training.md) | The **complete training procedure**, stage by stage, for both pipelines |
 | [inference.md](docs/architecture/inference.md) | The **complete inference procedure**: the walk-forward loop, artifacts, offline scoring, live checklist |
+| [experiments.md](docs/architecture/experiments.md) | **Every baseline and ablation explained** — what each arm isolates and how to read the table |
 
 **Data**
 
@@ -82,7 +85,6 @@ specific build:
 
 ```bash
 uv sync --extra cu130     # or cu128, cu126, cpu
-uv sync --extra encoder   # FinBERT + sentence-transformers news backend
 ```
 
 The CUDA extras are mutually exclusive. The channels cap at different torch
@@ -90,34 +92,30 @@ versions — `cu126`/`cu130` carry 2.14, `cu128` caps at 2.11 — so the lockfil
 each to the newest build it actually publishes. `cu129` is not offered: that channel
 stops at torch 2.13, below what stable-baselines3 needs here.
 
-### LLM access for the news channel
+### OpenJev (optional probabilistic specialists)
 
-The news agent speaks **only** the OpenAI-compatible protocol, so a self-hosted
-vLLM/Ollama server, an internal gateway or OpenAI itself is a `.env` change:
-
-```dotenv
-NEWS__BACKEND=llm_agent                # or: encoder (fully local), none
-NEWS__LLM__BASE_URL=https://<your-openai-compatible-endpoint>/v1
-NEWS__LLM__API_KEY=your_key
-NEWS__LLM__MODEL=your-chat-model
-NEWS__LLM__EMBED_MODEL=your-embedding-model
+```bash
+cd llm-serve && cp .env.example .env && docker compose up -d
 ```
 
-Records are computed once and cached to parquet, so the backtest never calls a
-model. Without an endpoint, set `NEWS__BACKEND=none` and everything else runs
-unchanged. Details in [docs/architecture/news-specialist.md](docs/architecture/news-specialist.md).
+Serves `openjev/openjev` through vLLM with the decision shim in front
+(`:3000` → `:8000`), then point the stack at it with
+`JEV__BASE_URL=http://127.0.0.1:3000`. Needs an NVIDIA GPU (~30 GB VRAM at
+FP8). `cd llm-serve && ./serve.sh` does the same without containers. Details in
+[docs/architecture/openjev-specialists.md](docs/architecture/openjev-specialists.md).
 
 ## Running
 
 ```bash
 ./scripts/train-tail-voli-risk.sh      # no-RL stack, static risk policy
 ./scripts/train-tail-voli-risk-rl.sh   # same stack, RL risk controller
+uv run main.py specialists             # score specialist prediction quality first
 uv run main.py experiments             # every baseline and ablation, one table
 uv run main.py data                    # rebuild the dataset from scratch
 ```
 
-Both training scripts take `--gate tailvoi|accuracy|attention|equal_weight` and
-`--run-id NAME`. Each run writes `data/processed/runs/<run_id>/` containing
+Both training scripts take `--gate tailvoi|accuracy|attention|equal_weight|cio`
+and `--run-id NAME`; the non-RL script also takes `--policy static|cio`. Each run writes `data/processed/runs/<run_id>/` containing
 `weights.parquet`, `ledger.parquet`, `run_meta.json`, four PNGs and a `report.html`.
 
 Procedures are documented in full in
@@ -128,8 +126,8 @@ Procedures are documented in full in
 
 Everything is env-driven through Dynaconf — a run is fully specified by `.env`.
 Prefixes: `SPLIT__`, `EVAL__`, `PANEL__`, `SPECIALISTS__`, `NEWS__`, `COPULA__`,
-`OPT__`, `TAILVOI__`, `STATIC_POLICY__`, `RL__`, `BACKTEST__`, plus `DATA__` for the
-dataset pipeline. See [.env.example](.env.example).
+`OPT__`, `TAILVOI__`, `STATIC_POLICY__`, `RL__`, `BACKTEST__`, `JEV__`, plus
+`DATA__` for the dataset pipeline. See [.env.example](.env.example).
 
 The split boundaries are the ones you will touch first:
 

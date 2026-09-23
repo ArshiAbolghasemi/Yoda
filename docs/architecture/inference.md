@@ -181,14 +181,14 @@ Every arm on the same panel, the same splits and the same intervals:
 | Family | Arms | The question |
 |---|---|---|
 | `gate` | `tailvoi`, `accuracy`, `attention`, `equal_weight` | **The headline.** Does gating on tail value beat gating on accuracy, on learned attention, and on nothing? |
-| `system` | 1/N, Mean-Variance, Risk-Parity, static-CVaR, vol-target | Does the stack beat classical allocation at all? |
+| `optimizer` | Wasserstein / moment / plain CVaR | Is the distributional robustness worth it? |
 | `policy` | static vs RL, same gate | Does regime-adaptive risk budgeting add value over a static rule? |
-| `news` | `none`, `encoder`, `llm_agent` | Does the news channel earn its place — and how much of it is leakage? |
+| `news` | `none` vs OpenJev | Does the news channel earn its place at all? |
 
-The `news` family is doing double duty: `no-news` vs the rest answers whether
-`z_news` is worth anything, and `encoder` vs `llm_agent` is the LLM contamination
-check, since only `encoder` is strictly point-in-time. If `llm_agent` beats
-`encoder` by a lot, suspect leakage before celebrating.
+The `news` family asks whether `z_news` is worth anything at all. Note the
+contamination caveat: OpenJev is pretrained, so it has read the future, and the
+prompts' date instruction cannot remove that. Treat a large news win as a
+leakage hypothesis first and a result second.
 
 Each news backend's feature cube is built once and shared across every arm that
 uses it. Arms that cannot run — no LLM endpoint configured, the `encoder` extra not

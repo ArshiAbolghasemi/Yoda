@@ -13,7 +13,13 @@ from yoda.config import load_config
 
 @pytest.fixture(scope="session")
 def config():
-    """Config with the news channel off, so tests never need an LLM endpoint."""
+    """Config pinned to the offline path.
+
+    The shipped defaults route every channel through OpenJev, which needs a
+    served model. The suite must run on a laptop with no GPU, so the fixtures
+    pin the numeric backends and drop the news channel. The Jev and CIO paths
+    are covered separately by their own fallback tests.
+    """
     base = load_config()
     research = base.research
     return dataclasses.replace(
@@ -21,6 +27,11 @@ def config():
         research=dataclasses.replace(
             research,
             news=dataclasses.replace(research.news, backend="none"),
+            # Every channel is OpenJev now, so the suite runs it in synthetic
+            # mode: deterministic fake answers, no server, no GPU. It exercises
+            # the real cache -> cube -> specialist path; only the answers are
+            # fabricated, and any run made this way is stamped in run_meta.
+            jev=dataclasses.replace(research.jev, synthetic=True),
             tailvoi=dataclasses.replace(
                 research.tailvoi,
                 sources=("technical", "volatility"),
@@ -47,7 +58,7 @@ def train_rows(panel, config):
 
 @pytest.fixture(scope="session")
 def stack(panel, config, train_rows):
-    from yoda.pipeline.stack import build_stack
+    from yoda.stack import build_stack
     from yoda.tailvoi.baselines import EqualWeightGate
 
     return build_stack(panel, config, train_rows, EqualWeightGate())

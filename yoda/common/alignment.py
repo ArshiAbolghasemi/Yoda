@@ -169,11 +169,12 @@ def build_panel(config: Config) -> AlignedPanel:
     # ATR is in price units; divide by price so assets are comparable.
     volatility[:, :, scaled] /= prices[:, :, None]
 
+    # Realized volatility is the root mean square of returns, not the sample
+    # deviation about a rolling mean - and the RMS form is what makes a 1-day
+    # window well defined: it reduces to |r|, HAR's daily term.
+    squared = pd.DataFrame(np.where(listed, raw_returns**2, np.nan))
     realized = [
-        pd.DataFrame(np.where(listed, raw_returns, np.nan))
-        .rolling(window, min_periods=window)
-        .std(ddof=0)
-        .to_numpy()
+        np.sqrt(squared.rolling(window, min_periods=window).mean().to_numpy())
         for window in settings.realized_vol_windows
     ]
     volatility = np.concatenate([volatility, np.stack(realized, axis=-1)], axis=-1)

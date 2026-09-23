@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 
 from yoda.common.types import RiskParamPolicy
-from yoda.pipeline.stack import fit_gate
 from yoda.pipeline.tail_voli_risk import run_tail_voli_risk
 from yoda.pipeline.tail_voli_risk_rl import run_tail_voli_risk_rl
+from yoda.stack import fit_gate
 from yoda.tailvoi.counterfactual import counterfactual_deltas
 
 

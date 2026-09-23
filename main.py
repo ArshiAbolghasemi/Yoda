@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import argparse
 
+from yoda.common.alignment import build_panel
 from yoda.config import load_config
+from yoda.data.pipeline import DataPipeline
+from yoda.evaluation.prediction import evaluate_specialists
+from yoda.pipeline import run_tail_voli_risk, run_tail_voli_risk_rl
+from yoda.pipeline.experiments import run_experiments
+from yoda.specialists import load_jev_table
 
 
 def main() -> None:
@@ -23,33 +29,65 @@ def main() -> None:
     for name in ("tail-voli-risk", "tail-voli-risk-rl"):
         run = sub.add_parser(name, help=f"run {name}")
         run.add_argument("--gate", default="tailvoi")
+        run.add_argument(
+            "--policy",
+            default="static",
+            choices=["static", "cio"],
+            help="risk-parameter policy (the RL pipeline always uses SAC)",
+        )
         run.add_argument("--run-id", default=name.replace("-", "_"))
+    specialists = sub.add_parser(
+        "specialists", help="score specialist prediction quality (before portfolios)"
+    )
+    specialists.add_argument(
+        "--channels", nargs="+", default=["technical", "volatility", "news"]
+    )
     experiments = sub.add_parser("experiments", help="run the baselines and ablations")
     experiments.add_argument(
         "--families",
         nargs="+",
-        default=["gate", "system", "policy", "news"],
+        default=["gate", "system", "policy", "openjev", "sources", "horizon"],
         help="which experiment families to run",
     )
     arguments = parser.parse_args()
 
     if arguments.command == "data":
-        from yoda.data.pipeline import DataPipeline
-
         DataPipeline(load_config().data).run()
         return
 
     config = load_config()
-    if arguments.command == "experiments":
-        from yoda.pipeline.experiments import run_experiments
+    if arguments.command == "specialists":
+        panel = build_panel(config)
+        rows = panel.positions(
+            config.research.split.test_start, config.research.split.test_end
+        )
+        tables = {}
+        for channel in arguments.channels:
+            try:
+                tables[channel] = load_jev_table(config, channel)
+            except FileNotFoundError:
+                print(f"no cached OpenJev answers for {channel!r}; skipping")
+        if not tables:
+            raise SystemExit("nothing to score - build the OpenJev features first")
+        print(evaluate_specialists(tables, panel, rows).round(4).to_string())
+        return
 
+    if arguments.command == "experiments":
         evaluation = run_experiments(config, families=tuple(arguments.families))
     else:
-        from yoda.pipeline import run_tail_voli_risk, run_tail_voli_risk_rl
-
         static = arguments.command == "tail-voli-risk"
-        run = run_tail_voli_risk if static else run_tail_voli_risk_rl
-        evaluation = run(config, run_id=arguments.run_id, gate=arguments.gate)
+        evaluation = (
+            run_tail_voli_risk(
+                config,
+                run_id=arguments.run_id,
+                gate=arguments.gate,
+                policy=arguments.policy,
+            )
+            if static
+            else run_tail_voli_risk_rl(
+                config, run_id=arguments.run_id, gate=arguments.gate
+            )
+        )
 
     for name, table in evaluation.tables.items():
         print(f"\n== {name} ==")

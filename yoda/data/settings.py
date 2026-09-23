@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from os import getenv
 from pathlib import Path
@@ -134,6 +135,18 @@ def _values(settings: Dynaconf, section: str) -> dict[str, Any]:
     )
 
 
+def _known(values: dict[str, Any], target: type) -> dict[str, Any]:
+    """Keep only keys the target dataclass declares.
+
+    ``NEWS__*`` is shared ground: the research stack uses it for the OpenJev
+    news backend while this pipeline uses it for the Alpaca downloader. Each
+    side consumes the keys it knows and ignores the rest, so the two can coexist
+    in one .env without one breaking the other.
+    """
+    fields = {field.name for field in dataclasses.fields(target)}
+    return {key: value for key, value in values.items() if key in fields}
+
+
 def build_data_config(settings: Dynaconf) -> DataConfig:
     """Build the data domain from the shared project settings."""
     data = settings.get("data", {})
@@ -163,11 +176,11 @@ def build_data_config(settings: Dynaconf) -> DataConfig:
     if "horizons" in targets:
         targets["horizons"] = tuple(int(value) for value in targets["horizons"])
     return DataConfig(
-        market=MarketDataConfig(**market),
-        news=NewsConfig(**news),
-        indicators=IndicatorConfig(**section("indicators")),
-        dataset=DatasetConfig(**section("dataset")),
-        download=DownloadConfig(**section("download")),
-        storage=StorageConfig(**storage),
-        targets=TargetConfig(**targets),
+        market=MarketDataConfig(**_known(market, MarketDataConfig)),
+        news=NewsConfig(**_known(news, NewsConfig)),
+        indicators=IndicatorConfig(**_known(section("indicators"), IndicatorConfig)),
+        dataset=DatasetConfig(**_known(section("dataset"), DatasetConfig)),
+        download=DownloadConfig(**_known(section("download"), DownloadConfig)),
+        storage=StorageConfig(**_known(storage, StorageConfig)),
+        targets=TargetConfig(**_known(targets, TargetConfig)),
     )

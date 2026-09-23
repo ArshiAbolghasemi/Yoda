@@ -24,8 +24,8 @@ from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer
 from yoda.config.settings import Config
 from yoda.evaluation.report import Evaluation, evaluate
-from yoda.pipeline.stack import AllocationStack, fit_gate
 from yoda.rl.sac import train_sac
+from yoda.stack import AllocationStack, fit_gate
 
 PIPELINE = "tail_voli_risk_rl"
 

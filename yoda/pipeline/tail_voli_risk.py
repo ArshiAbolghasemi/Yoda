@@ -16,13 +16,14 @@ from __future__ import annotations
 import numpy as np
 
 from yoda.backtest.engine import run_backtest
+from yoda.cio.agent import CIOAgent
 from yoda.common.alignment import AlignedPanel, build_panel
 from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer
 from yoda.config.settings import Config
 from yoda.evaluation.report import Evaluation, evaluate
-from yoda.pipeline.stack import AllocationStack, fit_gate
 from yoda.policy.static import StaticRiskPolicy
+from yoda.stack import AllocationStack, fit_gate
 
 PIPELINE = "tail_voli_risk"
 
@@ -32,6 +33,7 @@ def run_tail_voli_risk(
     *,
     run_id: str = "tail_voli_risk",
     gate: str = "tailvoi",
+    policy: str = "static",
     panel: AlignedPanel | None = None,
     features: dict[str, np.ndarray] | None = None,
     optimizer: DROCVaROptimizer | None = None,
@@ -43,7 +45,12 @@ def run_tail_voli_risk(
     alpha = config.research.optimizer.alpha
 
     def make_policy(stack: AllocationStack, train: np.ndarray, val: np.ndarray):
-        # The seam: a fixed, config-driven rule. The RL pipeline swaps this call.
+        # The seam. A fixed config-driven rule by default; ``policy="cio"``
+        # hands it to the CIO agent, and the RL pipeline swaps the same call.
+        if policy == "cio":
+            if isinstance(stack.gate, CIOAgent):
+                return stack.gate  # one decision drives both sockets
+            return CIOAgent(config, stack.sources)
         return StaticRiskPolicy(config.research.static_policy, alpha=alpha)
 
     logger.info("tail_voli_risk_start run=%s gate=%s", run_id, gate)
@@ -56,6 +63,6 @@ def run_tail_voli_risk(
         make_policy=make_policy,
         features=features,
         optimizer=optimizer,
-        label=label or f"static/{gate}",
+        label=label or f"{policy}/{gate}",
     )
     return evaluate(config, run_id, panel=panel, make_plots=make_plots)

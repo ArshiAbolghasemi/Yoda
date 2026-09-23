@@ -1,7 +1,9 @@
 # Allocator — DRO-CVaR
 
-Not an agent: the shared allocation layer both pipelines drive, and the reason the
-policy seam is only three numbers wide.
+Not an agent: the one allocation layer every arm drives, and the reason the
+policy seam is only three numbers wide. There is no alternative allocator —
+`OPT__DRO` ablates the *robustification* inside this solver, and that is the
+`optimizer` experiment family.
 
 | | |
 |---|---|
@@ -60,28 +62,6 @@ optimizer_fallback status=infeasible failures=1
 
 > Repeated fallbacks mean the budget is infeasible against the current scenario
 > set, and the book is being *held* rather than chosen. Watch for this line.
-
-## Classical baselines
-
-`EqualWeight`, `MeanVariance` and `RiskParity` implement the identical `solve`
-signature, so every baseline in the paper runs through one code path and the
-backtest harness cannot tell them apart:
-
-```python
-Arm(
-    "sys_risk_parity",
-    "Risk-Parity",
-    "system",
-    gate="equal_weight",
-    optimizer=RiskParity,
-)
-```
-
-| Baseline | Form |
-|---|---|
-| `EqualWeight` | 1/N over the investable universe |
-| `MeanVariance` | long-only Markowitz on the scenario covariance; `rp.lam` is risk aversion |
-| `RiskParity` | equal risk contribution via the convex log-barrier form |
 
 ## Settings
 

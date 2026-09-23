@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from yoda.cio.agent import CIOAgent
 from yoda.common.alignment import AlignedPanel
 from yoda.common.logger import logger
 from yoda.common.types import (
@@ -34,7 +35,8 @@ from yoda.common.types import (
 from yoda.config.settings import Config
 from yoda.copula.student_t import StudentTCopula, tail_stats
 from yoda.optimizer.dro_cvar import DROCVaR
-from yoda.specialists.news import NewsSpecialist, build_news_features
+from yoda.specialists.jev import build_jev_features
+from yoda.specialists.news import NewsSpecialist
 from yoda.specialists.technical import TechnicalSpecialist
 from yoda.specialists.volatility import VolatilitySpecialist
 from yoda.tailvoi.base import conditioning_strength, fuse, summarise
@@ -157,6 +159,36 @@ class AllocationStack:
         return full
 
 
+def resolve_features(
+    panel: AlignedPanel, config: Config, features: dict[str, np.ndarray] | None = None
+) -> dict[str, np.ndarray]:
+    """Materialise the feature cube for each configured channel.
+
+    Every channel's features are OpenJev's calibrated probabilities. The panel's
+    indicator cubes are still built, but they are the *state* each decision task
+    is shown, not the specialist's input.
+
+    Pre-built cubes passed in ``features`` are never rebuilt: the experiment
+    harness uses that to share one expensive Jev build across many arms.
+    """
+    research = config.research
+    supplied = features or {}
+    resolved: dict[str, np.ndarray] = {}
+    for channel in research.tailvoi.sources:
+        if channel == "news" and research.news.backend == "none":
+            continue
+        if channel in supplied:
+            resolved[channel] = supplied[channel]
+            continue
+        if channel != "news" and research.specialists.backend(channel) == "numeric":
+            # The conventional arm: the raw indicator cube the panel already
+            # carries, which is also what the OpenJev state is built from.
+            resolved[channel] = panel.features[channel]
+            continue
+        resolved[channel], _ = build_jev_features(panel, config, channel)
+    return resolved
+
+
 def build_stack(
     panel: AlignedPanel,
     config: Config,
@@ -167,10 +199,7 @@ def build_stack(
 ) -> AllocationStack:
     """Fit specialists and the copula on ``train_rows`` and assemble the stack."""
     research = config.research
-    features = dict(features if features is not None else panel.features)
-    if research.news.backend != "none" and "news" not in features:
-        cube, _ = build_news_features(panel, config)
-        features["news"] = cube
+    features = resolve_features(panel, config, features)
 
     universe = panel.universe(train_rows)
     if universe.sum() < 2:
@@ -185,6 +214,7 @@ def build_stack(
             z_dim=research.specialists.z_dim,
             ridge_alpha=research.specialists.ridge_alpha,
             seed=research.specialists.seed,
+            model=getattr(research.specialists, f"{name}_model", None),
         )
         specialist.fit(features[name][train_rows][:, universe], targets)
         specialists[name] = specialist
@@ -192,13 +222,15 @@ def build_stack(
     copula = StudentTCopula(research.copula)
     copula.fit(panel.returns[train_rows][:, universe])
 
+    allocator = optimizer or DROCVaR(research.optimizer)
+
     stack = AllocationStack(
         panel=panel,
         config=config,
         specialists=specialists,
         copula=copula,
         gate=gate,
-        optimizer=optimizer or DROCVaR(research.optimizer),
+        optimizer=allocator,
         universe=universe,
         features=features,
     )
@@ -226,6 +258,11 @@ def fit_gate(
     def build(stack: AllocationStack, rows: np.ndarray) -> Gate:
         if kind == "equal_weight":
             return EqualWeightGate()
+
+        if kind == "cio":
+            # No fitting: the CIO reads the desk and decides. It also satisfies
+            # RiskParamPolicy, so the same object can fill the policy socket.
+            return CIOAgent(config, stack.sources)
 
         if kind == "accuracy":
             gate = AccuracyGate(temperature=research.tailvoi.temperature)

@@ -1,0 +1,121 @@
+# OpenJev serving stack for the TailRiskFlow probabilistic specialists.
+#
+#   yoda specialists ──► openjev-shim :3000 ──► vllm :8000 ──► openjev/openjev
+#
+# The shim speaks the TypeSafe System One protocol, so yoda/specialists/jev
+# talks to it through the same client as the hosted API; only JEV__BASE_URL
+# changes.
+#
+#   cd docker && docker compose up -d        # first run downloads ~55 GB
+#   docker compose logs -f openjev-shim
+#   curl localhost:3000/v1/version
+#
+# Then point the research stack at it:
+#   JEV__BASE_URL=http://127.0.0.1:3000/v1
+#
+# Requires an NVIDIA GPU with the container toolkit. OpenJev 27B at FP8 needs
+# roughly 30 GB of VRAM at this context length; drop MAX_MODEL_LEN or
+# GPU_MEMORY_UTILIZATION if you are tighter than that.
+
+name: openjev
+
+# Settings come from the project's root .env:
+#   docker compose --env-file ../.env up -d
+
+services:
+  # One-shot: pull the weights (and helper/shim.py) into the shared volume.
+  model-downloader:
+    image: python:3.14-slim
+    volumes:
+      - models:/models
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODEL_REPO: ${MODEL_REPO:-openjev/openjev}
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        pip install --no-cache-dir "huggingface_hub[cli]"
+        if [ -f /models/openjev/config.json ]; then
+          echo "model already present, skipping download"
+        else
+          hf download "$${MODEL_REPO}" --local-dir /models/openjev
+        fi
+        test -f /models/openjev/helper/shim.py
+
+  vllm:
+    image: vllm/vllm-openai:v0.29.0
+    depends_on:
+      model-downloader:
+        condition: service_completed_successfully
+    volumes:
+      - models:/models
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    ipc: host
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - /models/openjev
+      - --host=0.0.0.0
+      - --port=8000
+      - --served-model-name=qwen
+      - --enable-prefix-caching
+      - --max-model-len=16384
+      - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.90}
+      - --limit-mm-per-prompt={"image":1}
+      - --trust-remote-code
+      - --max-num-seqs=256
+      - --max-logprobs=64
+      - --gdn-prefill-backend=triton
+      - --quantization=fp8
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/v1/models')"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]
+
+  openjev-shim:
+    build:
+      context: .
+      dockerfile: shim.Dockerfile
+    depends_on:
+      vllm:
+        condition: service_healthy
+    volumes:
+      - models:/models
+    ports:
+      - "${SHIM_PORT:-3000}:3000"
+    environment:
+      VLLM: http://vllm:8000/v1
+      TOKENIZER: /models/openjev
+      # Published readout calibration. These constants were fitted for this
+      # readout - changing them changes what the probabilities mean, which is
+      # the one thing Brier score and ECE depend on.
+      READOUT_T: ${READOUT_T:-0.85}
+      READOUT_NOUL_T: ${READOUT_NOUL_T:-1.829074}
+      READOUT_NOUL_BIAS: ${READOUT_NOUL_BIAS:-0}
+      READOUT_TARGETED: ${READOUT_TARGETED:-1}
+      READOUT_INSTR_STYLE: ${READOUT_INSTR_STYLE:-pyrepr}
+      SHIM_STAGGER: ${SHIM_STAGGER:-1}
+      # Optional bearer token; the client sends it as JEV__API_KEY.
+      SHIM_TOKEN: ${SHIM_TOKEN:-}
+    command: ["python", "/models/openjev/helper/shim.py", "--host", "0.0.0.0", "--port", "3000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:3000/v1/version')"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  models:

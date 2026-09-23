@@ -30,6 +30,17 @@ LEDGER_COLUMNS: tuple[str, ...] = (
     "cash",
     "gross",
 )
+# Written when available rather than required, so an arm that leaves a column
+# unset still produces a valid ledger.
+LEDGER_OPTIONAL: tuple[str, ...] = (
+    "portfolio_value",
+    "nu",
+    "scenario_vol",
+    "rp_lam",
+    "rp_budget",
+    "rp_turnover_penalty",
+    "rp_alpha",
+)
 
 
 @dataclass(frozen=True)
