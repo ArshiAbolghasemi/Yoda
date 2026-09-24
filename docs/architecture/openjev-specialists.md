@@ -140,9 +140,37 @@ Both paths use the serving configuration published on the model card:
 | prefix caching | enabled |
 | max model length | 16384 |
 | max concurrent sequences | 256 |
+| KV cache | `KV_CACHE_MEMORY` bytes, else `--gpu-memory-utilization` |
 | max logprobs | 64 |
 | prefill backend | `--gdn-prefill-backend triton` |
 | pinned versions | `vllm==0.29.0` (in the `cu130` extra), `openai==3.16.2`, `httpx==0.28.1` |
+
+### Sizing the KV cache
+
+By default vLLM derives the cache from `--gpu-memory-utilization`: whatever is
+left after weights, activation peak and CUDA graphs. That remainder moves when
+any of those three do, so the same fraction gives a different cache after a vLLM
+or model update — and throughput changes with it for no visible reason.
+
+vLLM prints the two numbers worth pinning on the first boot of a given
+model/GPU pair:
+
+```
+Replace gpu_memory_utilization config with `--kv-cache-memory=57794628301`
+(53.83 GiB) to fit into requested memory, or `--kv-cache-memory=67405561344`
+(62.78 GiB) to fully utilize gpu memory.
+```
+
+Put the one you want in the root `.env` and `serve.sh` passes it instead of the
+fraction:
+
+```bash
+KV_CACHE_MEMORY=67405561344     # A100 80GB, OpenJev fp8, max-model-len 16384
+```
+
+The number is specific to the GPU, the quantisation and the context length —
+read it off your own boot log rather than copying one. Leave it empty to go back
+to the fraction.
 
 ### Readout calibration
 

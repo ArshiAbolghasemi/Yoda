@@ -36,6 +36,12 @@ VLLM_PORT="${VLLM_PORT:-8000}"
 SHIM_PORT="${SHIM_PORT:-3000}"
 SERVED_NAME="${SERVED_NAME:-qwen}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
+# Size the KV cache directly, in bytes. vLLM prints the two numbers worth using
+# on the first boot of a given model/GPU pair: one that fits the current
+# gpu-memory-utilization, one that fills the card. Set this and the fraction
+# stops mattering - the cache no longer shrinks when weights or CUDA graphs
+# grow, so throughput is reproducible across vLLM upgrades.
+KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"
 
 LOGS=./logs
 PIDS=./run
@@ -152,12 +158,18 @@ wait_for() { # name url timeout
 
 start_vllm() {
   alive vllm && { say "vLLM already running (pid $(cat $PIDS/vllm.pid))"; return; }
-  say "starting vLLM on :$VLLM_PORT"
+  local mem=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
+  if [ -n "$KV_CACHE_MEMORY" ]; then
+    mem=(--kv-cache-memory "$KV_CACHE_MEMORY")
+    say "starting vLLM on :$VLLM_PORT (kv cache $((KV_CACHE_MEMORY / 1073741824)) GiB)"
+  else
+    say "starting vLLM on :$VLLM_PORT (gpu-memory-utilization $GPU_MEMORY_UTILIZATION)"
+  fi
   nohup uv run --no-sync --active vllm serve "$MODEL_DIR" \
     --host "$HOST" --port "$VLLM_PORT" --served-model-name "$SERVED_NAME" \
     --enable-prefix-caching \
     --max-model-len 16384 \
-    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+    "${mem[@]}" \
     --limit-mm-per-prompt '{"image":1}' \
     --trust-remote-code \
     --max-num-seqs 256 \

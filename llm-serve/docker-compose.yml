@@ -72,6 +72,11 @@ services:
       - --enable-prefix-caching
       - --max-model-len=16384
       - --gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.90}
+      # To pin the KV cache instead of deriving it from the fraction above,
+      # uncomment and set KV_CACHE_MEMORY in the root .env. It has no safe
+      # default - vLLM prints the right byte count for your GPU on first boot -
+      # so it stays commented rather than shipping someone else's number.
+      # - --kv-cache-memory=${KV_CACHE_MEMORY}
       - --limit-mm-per-prompt={"image":1}
       - --trust-remote-code
       - --max-num-seqs=256
