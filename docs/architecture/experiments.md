@@ -87,7 +87,7 @@ same DRO-CVaR solver. Only `Gate.gate(spec) → g` changes.
 | `gate_accuracy` | Spearman rank IC on the training window, softmaxed | Rewards being **right**, with no notion of tail value. This is the arm that isolates the paper's actual claim: that *accuracy is the wrong objective for a tail-risk portfolio*. |
 | `gate_attention` | Learned torch attention over source summaries, trained on return MSE | Learned, but supervised by the **mean**, not by risk. Separates "learned" from "learned on the right objective" — without it, a TailVoI win could just be "a fitted gate beats a fixed one". |
 | `gate_tailvoi` | Predicted counterfactual `Δᵢ`, softmaxed | The proposal. |
-| `gate_cio` | An OpenJev decision over the three channels | Can a reasoning model allocate attention better than a regressor trained on counterfactual targets? |
+| `gate_cio` | Cross-sectional dispersion per channel, no model inference | Selecting it hands the CIO the whole decision — gate, stance and weights — so this is the monolithic control, not just a different gate. |
 
 The three controls are chosen to strip a TailVoI win down to its actual cause.
 `equal` removes gating; `accuracy` keeps learning but changes the objective;
@@ -128,7 +128,7 @@ All four hold the gate at Tail-VoI and vary only
 | `policy_rl` | SAC, trained against `AllocationEnv` | Reward `R − λ_CVaR·CVaR − λ_DD·DD − c·turnover`. ⚠️ `λ_CVaR` is a **fixed shaping weight**, a different quantity from the `λ` the policy chooses. |
 | `policy_vol_target` | Static rule with `vol_target = 0.02` | The classical volatility-targeting schedule, as an *internal* rule rather than an external baseline. |
 | `policy_cio` | OpenJev risk stance | A reasoning model instead of RL, mapped through the *same* `action_to_params` and the same bounds SAC searches — so the comparison is judgement, not reachable range. |
-| `cio_full` | CIO sets gate **and** stance | The only arm without Tail-VoI. Tests whether a single agent can do the whole CIO role. |
+| `cio_full` | CIO sets the gate, the stance **and** the weights | The monolithic control. The only arm without Tail-VoI *or* DRO-CVaR, so its CVaR budget is advisory — see [cio-agent.md](cio-agent.md). |
 
 `policy` and `gate` are orthogonal by construction: `gate` pins the policy at
 static and varies the gate; `policy` pins the gate at Tail-VoI and varies the

@@ -1,116 +1,132 @@
 # CIO agent
 
-The specialists form views. The CIO decides **whom to trust today** and **how
-much risk the book should carry**. This agent does exactly those two things, in
-one OpenJev call, and nothing else.
+One decision-maker for the whole allocation. Where the main architecture splits
+the decision into three measurable pieces, this agent does all three itself.
 
 | | |
 |---|---|
-| Input | the desk briefing — each channel's view, dispersion and state digest |
-| Output | a trust distribution `g`, and a risk stance → `(λ, B, c)` |
-| Fills | `Gate` **and** `RiskParamPolicy` |
+| Input | `SpecialistOutput` — what the three channels reported |
+| Output | the gate `g`, the risk stance `(λ, B, c)`, **and** the portfolio weights |
+| Fills | `Gate` **and** `RiskParamPolicy` **and** `DROCVaROptimizer` |
+| Model inference | **none** — no OpenJev, no network, fully deterministic |
 | Code | `yoda/cio/agent.py` |
 
-## Why the CIO does not emit weights
-
-This is the load-bearing design decision, so it is worth being explicit.
-
-A HedgeAgents-style manager reads the analysts and outputs a portfolio. That
-concentrates three separable judgements into one opaque function, and it costs
-two things this project cannot afford:
-
-**Attribution.** Tail-VoI exists to *measure* what each information source is
-worth in the tail. If a single agent consumes all three channels and emits
-weights, there is no longer a quantity to measure — you cannot say whether a
-good quarter came from the news channel or from the manager's mood.
-
-**Risk guarantees.** `w ≥ 0`, `Σw = 1`, the per-asset cap and `CVaR_α(w) ≤ B`
-are enforced by the convex program, not by good behaviour. An agent that emits
-weights directly turns every one of those into a suggestion.
-
-So the CIO sets *parameters*, and the DRO-CVaR solver still builds the book.
-The agent that emits weights directly is the direct-weight RL variant, and it
-is out of scope by design.
-
-## The decision
-
-One `system_one` call, two typed questions:
-
-```python
-"trust":  Choice(criteria={"technical": ..., "volatility": ..., "news": ...})
-"stance": Score(criteria=[ "maximally defensive", ..., "maximally aggressive" ])
+```
+             main stack                              CIO agent
+  ┌────────────────────────────┐          ┌────────────────────────────┐
+  specialists                             specialists
+       │                                       │
+  Tail-VoI gate      → g                       │
+       │                                       ├─► one agent → g
+  risk policy        → (λ, B, c)                ├─►           → (λ, B, c)
+       │                                       └─►           → w
+  DRO-CVaR           → w
 ```
 
-`ChoiceAnswer.probabilities` over the three channels **is** the gate weight
-vector — no parsing, no thresholding, and it sums to one by construction.
-`ScoreAnswer.score` is the probability-weighted stance on the rubric.
+## Why it exists
 
-The briefing carries numbers only — each channel's mean view, its
-cross-sectional dispersion, its strongest signal, plus a short state digest. No
-prose, no recommendations, and nothing dated after the decision. A test asserts
-the briefing contains no forward-looking field.
+It is the **monolithic-manager control**. A single agent reading the analysts
+and producing a portfolio is the common design in multi-agent trading systems;
+this repository's premise is that *decomposing* that decision is worth
+something. Running both on identical splits is the only honest way to find out,
+and that requires actually building the thing being argued against.
 
-## Mapping a stance onto risk parameters
+## What it costs
+
+Two guarantees the main stack provides are **not** available here. Both are
+deliberate — a control that kept them would not be a control — and both need
+stating in any write-up that quotes this arm's numbers.
+
+**1. The CVaR budget is not enforced.** DRO-CVaR imposes `CVaR_α(w) ≤ B` as a
+hard constraint. The CIO solves a long-only mean-variance program instead, so
+`B` is advisory and a run can breach its own budget. Realised CVaR is still
+written to the ledger, so a breach is visible after the fact rather than
+prevented.
+
+**2. Attribution is gone.** Tail-VoI exists to measure what each source is
+worth in the tail. When one agent consumes all three channels and emits
+weights, there is no longer a quantity being measured.
+
+What *is* still enforced: the simplex, the per-asset cap and the turnover
+penalty, because those come from the convex program it solves.
+
+## How it decides
+
+### Trust → `g`
+
+Each channel is scored by the **cross-sectional dispersion** of its view:
 
 ```python
-action = [1 - 2·stance,  2·stance - 1,  0]
-params = action_to_params(action, rl_config, alpha)     # the SAC mapping
+score_i = (std(μ̂_i) − centre_i) / scale_i
+g       = softmax(score / CIO__TEMPERATURE)
 ```
 
-The stance is deliberately routed through **the same `action_to_params` mapping
-SAC uses**, against the same `RL__LAM_BOUNDS` / `RL__BUDGET_BOUNDS`. "The CIO
-picks the risk parameters" and "SAC picks the risk parameters" are therefore
-choices from an identical option set, and the comparison between them is about
-judgement rather than about reachable ranges.
+A channel that differentiates between assets today is saying something; one
+reporting nearly the same number for everything is not, whatever its level.
+Dispersion is comparable across a directional view and a risk view in a way a
+raw mean is not.
 
-Aggressive means *less* risk aversion and a *wider* budget, so `λ` runs
-backwards against the stance while `B` runs with it — asserted by a test.
-Turnover cost is not a CIO judgement and stays at the configured value. `α` is
-never touched.
+`centre_i` and `scale_i` are fitted on `CIO__FIT_STATES` training dates. Without
+that normalisation the softmax would compare a volatility view in daily
+standard deviations against a directional view in basis points, and the larger
+unit would win every day regardless of content.
+
+### Stance → `(λ, B, c)`
+
+A volatility-targeting rule on the current scenario tail:
+
+```python
+ratio = clip(CIO__VOL_TARGET / CVaR_now, 0.2, 5.0)
+λ      = static.lam / ratio          # less risk aversion when the tail is quiet
+B      = static.budget · ratio       # more headroom when the tail is quiet
+c      = static.turnover_penalty     # not a CIO judgement
+```
+
+`α` is never touched — no agent redefines the risk measure it is judged by.
+
+### Weights → `w`
+
+Long-only mean-variance on the scenario covariance, with the `λ` and `c` it
+just chose, subject to the simplex and the per-asset cap. Deliberately **not**
+the DRO-CVaR program: a control that borrowed the stack's risk machinery would
+not be measuring what the stack's risk machinery is worth.
 
 ## Using it
 
 ```bash
-./scripts/train-tail-voli-risk.sh --gate cio                  # CIO sets the gate
-./scripts/train-tail-voli-risk.sh --policy cio                # CIO sets the risk stance
-./scripts/train-tail-voli-risk.sh --gate cio --policy cio     # both, one decision
+./scripts/train-tail-voli-risk.sh --gate cio
 ```
 
-With both sockets filled the *same object* serves each, so one decision per
-rebalance drives the gate and the stance rather than two contradictory ones.
+Selecting the CIO as the gate hands it the whole decision: `fit_gate` installs
+the same object as `stack.optimizer`, so DRO-CVaR is out of the loop for that
+run. The log says so explicitly:
 
-Three arms are in the matrix: `gate_cio` (in the `gate` family, head-to-head
-against TailVoI / Accuracy / Attention / EqualWeight), `policy_cio` and
-`cio_full` (in the `policy` family, beside the static rule and SAC).
+```
+cio_installed gate+policy+optimizer replaced by the CIO
+```
 
-## Cost, caching and failure
+`--policy cio` reuses that same instance rather than constructing a second one,
+so one decision drives every socket instead of three that could disagree.
 
-One call per **rebalance**, not per asset-day — roughly 136 per run at a 5-day
-cadence, against ~79k for a specialist channel. Decisions are cached on demand
-by `(state hash, model, prompt version, sources)` and flushed every 25 rows, so
-a repeated run or a second ablation arm costs nothing.
+## Settings
 
-The agent is built to **never sink a run**:
-
-- construction never touches the network — the model id resolves lazily, and an
-  unreachable endpoint records `"unresolved"` rather than raising (keys written
-  under it cannot collide with real-model keys, which is the safe direction);
-- a failed decision logs and falls back to an even gate;
-- `act()` with no decision yet returns a neutral stance rather than inventing
-  conviction.
-
-That is what lets the test suite exercise the CIO with no server running.
+| Setting | Default | Effect |
+|---|---|---|
+| `CIO__TEMPERATURE` | 1.0 | Softmax sharpness over channel dispersion |
+| `CIO__FIT_STATES` | 250 | Training dates sampled to normalise each channel |
+| `CIO__VOL_TARGET` | 0.02 | Realised-CVaR target driving the risk stance |
 
 ## The open question
 
-Whether a reasoning model allocates attention better than a regressor trained
-on counterfactual tail-risk targets is exactly the kind of claim this repository
-is built to test rather than assert. `gate_cio` sits in the same family as
-`gate_tailvoi` on identical splits, and the answer — positive, neutral or
-negative — is whatever the table says.
+Whether one agent allocating attention, risk and capital together beats three
+components each measured on its own objective is exactly the kind of claim this
+repository is built to test rather than assert. `gate_cio` and `cio_full` sit in
+the matrix on identical splits, and the answer — positive, neutral or negative —
+is whatever the table says.
 
 ## See also
 
-- [tail-voi-gate.md](tail-voi-gate.md) — the learned gate the CIO competes with
-- [risk-policy.md](risk-policy.md) — the seam, and the SAC controller it competes with
-- [openjev-specialists.md](openjev-specialists.md) — serving and the decision protocol
+- [tail-voi-gate.md](tail-voi-gate.md) — the gate it replaces
+- [risk-policy.md](risk-policy.md) — the seam it replaces
+- [optimizer.md](optimizer.md) — the DRO-CVaR program it bypasses
+- [experiments.md](experiments.md) — where its arms sit

@@ -1,70 +1,82 @@
-"""The CIO agent: one decision that sets both the gate and the risk stance.
+"""The CIO agent: one decision-maker for the whole allocation.
 
-A chief investment officer does two things a specialist cannot: decides **whom
-to trust today**, and decides **how much risk the book should carry**. This
-agent does exactly those two, in a single OpenJev call, and nothing else.
+Where the main architecture decomposes the decision into three measurable
+pieces — Tail-VoI decides *whom to trust*, the risk policy decides *how much
+risk to carry*, and DRO-CVaR *builds the book* — this agent does all three
+itself:
 
-It fills both sockets:
+* :class:`~yoda.common.types.Gate` — sets ``g`` over the information sources.
+* :class:`~yoda.common.types.RiskParamPolicy` — sets ``(lam, B, c)``.
+* :class:`~yoda.common.types.DROCVaROptimizer` — emits the portfolio weights.
 
-* :class:`~yoda.common.types.Gate` — the trust distribution over information
-  sources becomes ``g``, replacing the learned Tail-VoI gate.
-* :class:`~yoda.common.types.RiskParamPolicy` — the risk stance becomes
-  ``(lam, budget, turnover_penalty)``, replacing the static rule or SAC.
+It uses **no OpenJev and no model inference at all**. Everything it decides is
+a deterministic function of what the specialists already reported, so it is
+reproducible, free to run, and needs nothing served.
 
-What it deliberately does **not** do is emit portfolio weights. The DRO-CVaR
-solver still enforces ``w >= 0``, ``sum w = 1``, the per-asset cap and the CVaR
-budget. A CIO that produced weights directly would turn every one of those
-guarantees into a suggestion, and there would be no way to attribute the result
-to anything.
+Why it exists
+-------------
+It is the monolithic-manager control. A single agent reading the analysts and
+producing a portfolio is the common design in multi-agent trading systems, and
+the question this repository asks is whether *decomposing* that decision buys
+anything. Running both on identical splits is the only way to find out.
 
-The stance is mapped onto the *same* action space SAC searches, so
-"CIO picks the risk parameters" and "SAC picks the risk parameters" are choices
-from an identical option set and the comparison is clean.
+What it costs
+-------------
+Two properties the main stack guarantees are **not** available here, and both
+matter:
 
-Cost is small: one call per rebalance (~136 per run at a 5-day cadence), not one
-per asset-day, so decisions are cached on demand rather than pre-built.
+1. **The CVaR budget is not enforced.** ``B`` becomes advisory. DRO-CVaR
+   imposes ``CVaR_alpha(w) <= B`` as a hard constraint; this agent solves a
+   mean-variance program instead, so a run can breach its own budget. The
+   realised CVaR is still recorded in the ledger, so the breach is visible
+   after the fact rather than prevented.
+2. **Attribution is gone.** Tail-VoI exists to measure what each source is
+   worth in the tail. When one agent consumes all three channels and emits
+   weights, there is no longer a quantity being measured — which is precisely
+   what makes this a control rather than a proposal.
+
+The simplex, the per-asset cap and the turnover penalty *are* still enforced,
+because those come from the convex program it solves.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
+import cvxpy as cp
 import numpy as np
-from typesafe_sdk import Choice, Score
 
 from yoda.common.logger import logger
 from yoda.common.types import (
+    DROCVaROptimizer,
     Gate,
     GateOutput,
     MarketState,
     RiskParamPolicy,
     RiskParams,
     SpecialistOutput,
+    TailScenarios,
 )
-from yoda.config.research import CIOConfig, JevConfig, RLConfig, StaticPolicyConfig
+from yoda.config.research import CIOConfig, OptimizerConfig, StaticPolicyConfig
 from yoda.config.settings import Config
-from yoda.policy.rl import action_to_params
-from yoda.specialists.jev.cache import JevCache, state_hash
-from yoda.specialists.jev.client import JevClient, resolve_model
-from yoda.tailvoi.base import fuse, summarise
+from yoda.tailvoi.base import fuse, softmax
 
-SOURCE_BRIEF: dict[str, str] = {
-    "technical": "Trend, momentum and price-structure evidence.",
-    "volatility": "How wide the return distribution is about to be.",
-    "news": "What today's headlines imply for this market.",
-}
-STANCE_RUBRIC: tuple[str, ...] = (
-    "Maximally defensive: protect capital, accept very little tail risk.",
-    "Defensive: lean toward capital preservation.",
-    "Neutral: balance return against tail risk as usual.",
-    "Constructive: accept more tail risk to pursue return.",
-    "Maximally aggressive: pursue return, tolerate a wide tail.",
-)
-COLUMNS: tuple[str, ...] = ("stance", "stance_confidence", "trust_confidence")
+EPSILON = 1e-12
 
 
-class CIOAgent(Gate, RiskParamPolicy):
-    """Reads the desk's views, sets the gate and the risk stance."""
+def _dispersion(view: np.ndarray) -> float:
+    """Cross-sectional spread of a source's view on one date.
+
+    A channel that differentiates between assets today is saying something; a
+    channel reporting nearly the same number for everything is not, whatever
+    its level. Spread is comparable across a directional view and a risk view,
+    which a raw mean is not.
+    """
+    values = np.asarray(view, dtype=np.float64).reshape(-1)
+    finite = values[np.isfinite(values)]
+    return float(finite.std()) if finite.size else 0.0
+
+
+class CIOAgent(Gate, RiskParamPolicy, DROCVaROptimizer):
+    """Reads the desk, sets the trust and the risk stance, and builds the book."""
 
     name = "cio"
 
@@ -73,139 +85,127 @@ class CIOAgent(Gate, RiskParamPolicy):
         config: Config,
         sources: tuple[str, ...],
         cio: CIOConfig | None = None,
-        jev: JevConfig | None = None,
-        rl: RLConfig | None = None,
         static: StaticPolicyConfig | None = None,
+        optimizer: OptimizerConfig | None = None,
     ):
         research = config.research
         self.config = config
         self.cio = cio or research.cio
-        self.jev = jev or research.jev
-        self.rl = rl or research.rl
         self.static = static or research.static_policy
-        self.alpha = research.optimizer.alpha
+        self.optimizer = optimizer or research.optimizer
+        self.alpha = self.optimizer.alpha
         self.sources = tuple(sources)
-        self._model: str | None = None  # resolved lazily; never at construction
-        path: Path = config.path(self.cio.cache) / "decisions.parquet"
-        self.cache = JevCache(path, flush_every=25)
-        self._client: JevClient | None = None
-        self._latest: dict[str, float] | None = None
-        self._trust: dict[str, float] = dict.fromkeys(
-            self.sources, 1.0 / len(self.sources)
+        # Per-source dispersion normaliser, fitted on the training window so the
+        # channels are comparable before they are compared.
+        self.centre: dict[str, float] = dict.fromkeys(self.sources, 0.0)
+        self.scale: dict[str, float] = dict.fromkeys(self.sources, 1.0)
+        self.fitted = False
+        self._stance = 0.5
+
+    # ---- fitting ---------------------------------------------------------
+
+    def fit(self, stack, rows: np.ndarray) -> None:
+        """Learn each channel's typical dispersion from the training window.
+
+        Without this the softmax would compare a volatility view measured in
+        daily standard deviations against a directional view measured in basis
+        points, and the larger unit would win every day regardless of content.
+        """
+        sample = rows[:: max(len(rows) // self.cio.fit_states, 1)][
+            : self.cio.fit_states
+        ]
+        observed: dict[str, list[float]] = {name: [] for name in self.sources}
+        for position in sample:
+            spec = stack.specialist_output(int(position))
+            for name in self.sources:
+                if name in spec.mu_hat:
+                    observed[name].append(_dispersion(spec.mu_hat[name]))
+        for name, values in observed.items():
+            if values:
+                self.centre[name] = float(np.mean(values))
+                self.scale[name] = float(np.std(values)) or 1.0
+        self.fitted = True
+        logger.info(
+            "cio_fitted states=%d sources=%s centre=%s",
+            len(sample),
+            ",".join(self.sources),
+            {k: round(v, 6) for k, v in self.centre.items()},
         )
-
-    # ---- the decision ----------------------------------------------------
-
-    def _questions(self) -> dict:
-        return {
-            "trust": Choice(
-                instructions=(
-                    "Three research channels have reported on this market. Which "
-                    "one should carry the most weight in today's allocation?"
-                ),
-                criteria={name: SOURCE_BRIEF[name] for name in self.sources},
-            ),
-            "stance": Score(
-                instructions=(
-                    "Given these views, how much tail risk should the book carry today?"
-                ),
-                criteria=list(STANCE_RUBRIC[: self.cio.levels]),
-            ),
-        }
-
-    def _brief(self, spec: SpecialistOutput) -> dict:
-        """A compact, point-in-time desk briefing - numbers only, no prose."""
-        brief: dict[str, object] = {"channels": {}}
-        for name in self.sources:
-            view = np.asarray(spec.mu_hat[name], dtype=np.float64).reshape(-1)
-            brief["channels"][name] = {
-                "mean_view": round(float(np.nanmean(view)), 6),
-                "dispersion": round(float(np.nanstd(view)), 6),
-                "strongest": round(float(np.nanmax(np.abs(view))), 6),
-            }
-        summary = summarise(spec, self.sources)
-        brief["state_digest"] = [round(float(v), 4) for v in summary[:12]]
-        return brief
-
-    def decide(self, spec: SpecialistOutput) -> dict[str, float]:
-        """One call per distinct desk briefing; repeats come from the cache."""
-        brief = self._brief(spec)
-        if self._model is None:
-            self._model = resolve_model(self.jev)
-        key = "|".join(
-            [state_hash(brief), self._model, self.cio.prompt_version, *self.sources]
-        )
-        if self.cache.has(key):
-            row = self.cache.table(COLUMNS).loc[key]
-            record = {column: float(row[column]) for column in COLUMNS}
-            record.update(
-                {
-                    f"trust_{name}": float(row.get(f"trust_{name}", 0.0))
-                    for name in self.sources
-                }
-            )
-            return record
-
-        if self._client is None:
-            self._client = JevClient(self.jev)
-        response = self._client.ask(brief, self._questions())
-        trust = response.choices["trust"]
-        stance = response.scores["stance"]
-        record = {
-            "stance": float(stance.score) / max(self.cio.levels - 1, 1),
-            "stance_confidence": float(stance.confidence),
-            "trust_confidence": float(trust.confidence),
-            **{
-                f"trust_{name}": float(trust.probabilities.get(name, 0.0))
-                for name in self.sources
-            },
-        }
-        self.cache.add(key, "portfolio", "n/a", record)
-        return record
 
     # ---- Gate ------------------------------------------------------------
 
     def gate(self, spec: SpecialistOutput) -> GateOutput:
-        sources = tuple(name for name in self.sources if name in spec.z)
-        try:
-            record = self.decide(spec)
-        except Exception as error:  # noqa: BLE001 - never sink a backtest
-            logger.warning(
-                "cio_decision_failed error=%s; falling back to even gate", error
-            )
-            return fuse(spec, dict.fromkeys(sources, 1.0 / len(sources)))
-        self._latest = record
-        weights = {name: record.get(f"trust_{name}", 0.0) for name in sources}
-        total = sum(weights.values())
-        if total <= 0:
-            weights = dict.fromkeys(sources, 1.0 / len(sources))
-        else:
-            weights = {name: value / total for name, value in weights.items()}
-        self._trust = weights
-        return fuse(spec, weights)
+        """Trust each channel in proportion to how much it is saying today."""
+        sources = tuple(name for name in self.sources if name in spec.mu_hat)
+        if not sources:
+            raise ValueError("CIO has no information sources to gate")
+        scores = np.array(
+            [
+                (_dispersion(spec.mu_hat[name]) - self.centre.get(name, 0.0))
+                / max(self.scale.get(name, 1.0), EPSILON)
+                for name in sources
+            ]
+        )
+        weights = softmax(np.nan_to_num(scores), self.cio.temperature)
+        return fuse(spec, dict(zip(sources, weights, strict=True)))
 
     # ---- RiskParamPolicy --------------------------------------------------
 
     def act(self, state: MarketState) -> RiskParams:
-        """Map the stance onto the action space SAC searches.
-
-        Aggressive means *less* risk aversion and a *wider* CVaR budget, so
-        ``lam`` runs backwards against the stance while ``budget`` runs with it.
-        Turnover cost is not a CIO judgement and stays at the configured value.
-        """
-        stance = 0.5 if self._latest is None else float(self._latest["stance"])
-        stance = float(np.clip(stance, self.cio.stance_floor, self.cio.stance_ceiling))
-        action = np.array([1.0 - 2.0 * stance, 2.0 * stance - 1.0, 0.0])
-        params = action_to_params(action, self.rl, self.alpha)
+        """A volatility-targeting stance: widen when calm, tighten when not."""
+        current = float(state.tail_stats.get("cvar", 0.0))
+        target = self.cio.vol_target
+        if current > 0 and target > 0:
+            ratio = float(np.clip(target / current, 0.2, 5.0))
+        else:
+            ratio = 1.0
+        self._stance = ratio
         return RiskParams(
-            lam=params.lam,
-            budget=params.budget,
+            # More headroom when the tail is quiet, less when it is not.
+            lam=float(np.clip(self.static.lam / ratio, 0.01, 100.0)),
+            budget=float(self.static.budget * ratio),
             turnover_penalty=self.static.turnover_penalty,
             alpha=self.alpha,
         )
 
-    def close(self) -> None:
-        self.cache.flush()
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+    # ---- DROCVaROptimizer -------------------------------------------------
+
+    def solve(
+        self,
+        mu: np.ndarray,
+        scen: TailScenarios,
+        rp: RiskParams,
+        w_prev: np.ndarray,
+    ) -> np.ndarray:
+        """Long-only mean-variance on the scenario covariance.
+
+        Deliberately **not** the DRO-CVaR program: this agent is the control
+        for what the decomposed stack buys, so it must not borrow the stack's
+        risk machinery. ``rp.budget`` is therefore advisory here - the simplex,
+        the cap and the turnover penalty bind, the CVaR bound does not.
+        """
+        view = np.nan_to_num(np.asarray(mu, dtype=np.float64).reshape(-1))
+        previous = np.asarray(w_prev, dtype=np.float64).reshape(-1)
+        assets = view.size
+        covariance = np.atleast_2d(
+            np.cov(np.asarray(scen.scenarios, dtype=np.float64), rowvar=False)
+        )
+        w = cp.Variable(assets, nonneg=True)
+        cap = max(self.optimizer.max_weight, 1.5 / assets)
+        objective = (
+            view @ w
+            - (rp.lam / 2) * cp.quad_form(w, cp.psd_wrap(covariance))
+            - rp.turnover_penalty * cp.norm1(w - previous)
+        )
+        problem = cp.Problem(cp.Maximize(objective), [cp.sum(w) == 1, w <= cap])
+        try:
+            problem.solve(solver=self.optimizer.solver)
+        except cp.error.SolverError:
+            problem.status = "solver_error"
+        if w.value is None:
+            logger.warning("cio_solve_fallback status=%s", problem.status)
+            total = previous.sum()
+            return previous / total if total > 0 else np.full(assets, 1.0 / assets)
+        weights = np.clip(np.asarray(w.value, dtype=np.float64), 0.0, None)
+        total = weights.sum()
+        return weights / total if total > 0 else np.full(assets, 1.0 / assets)

@@ -133,15 +133,15 @@ class JevConfig:
 
 @dataclass(frozen=True)
 class CIOConfig:
-    """The CIO agent: one decision that sets both the gate and the risk stance."""
+    """The monolithic CIO agent: one decision-maker, no model inference.
 
-    prompt_version: str = "v1"  # part of the decision cache key
-    cache: str = "processed/cio"
-    # The stance rubric is mapped onto the SAME action space SAC searches, so a
-    # CIO run and an RL run are choosing from an identical set of options.
-    levels: int = 5  # rubric 0 (maximally defensive) .. levels-1 (aggressive)
-    stance_floor: float = 0.0  # clamp the usable stance range if needed
-    stance_ceiling: float = 1.0
+    It sets the gate, the risk stance and the portfolio weights itself, so it
+    is the control for what decomposing that decision actually buys.
+    """
+
+    temperature: float = 1.0  # softmax sharpness over channel dispersion
+    fit_states: int = 250  # training dates sampled to normalise each channel
+    vol_target: float = 0.02  # realised-CVaR target driving the risk stance
 
 
 @dataclass(frozen=True)

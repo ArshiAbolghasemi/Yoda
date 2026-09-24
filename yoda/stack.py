@@ -260,9 +260,14 @@ def fit_gate(
             return EqualWeightGate()
 
         if kind == "cio":
-            # No fitting: the CIO reads the desk and decides. It also satisfies
-            # RiskParamPolicy, so the same object can fill the policy socket.
-            return CIOAgent(config, stack.sources)
+            # One agent for the whole decision: it is the gate, the policy and
+            # the allocator, so it replaces the optimizer on the stack too.
+            # That means DRO-CVaR is not in the loop for this arm.
+            agent = CIOAgent(config, stack.sources)
+            agent.fit(stack, rows)
+            stack.optimizer = agent
+            logger.info("cio_installed gate+policy+optimizer replaced by the CIO")
+            return agent
 
         if kind == "accuracy":
             gate = AccuracyGate(temperature=research.tailvoi.temperature)

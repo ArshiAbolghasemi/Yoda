@@ -43,7 +43,7 @@ weights. Then read whichever component you are working on.
 | [tail-voi-gate.md](docs/architecture/tail-voi-gate.md) | **The centerpiece** — counterfactual Δ targets, the learned gate, and the three baseline gates it must beat |
 | [risk-policy.md](docs/architecture/risk-policy.md) | **The seam** — the static rule, the SAC controller, the environment and its reward |
 | [openjev-specialists.md](docs/architecture/openjev-specialists.md) | The optional OpenJev 27B backend — serving, decision tasks, caching, calibration metrics |
-| [cio-agent.md](docs/architecture/cio-agent.md) | The CIO agent — sets the gate *and* the risk stance in one decision, and why it never emits weights |
+| [cio-agent.md](docs/architecture/cio-agent.md) | The CIO agent — one decision-maker for gate, risk stance *and* weights, with no model inference |
 
 **Supporting components**
 
