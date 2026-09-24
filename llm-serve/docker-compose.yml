@@ -50,6 +50,8 @@ services:
         test -f /models/openjev/helper/shim.py
 
   vllm:
+    # Same CUDA 13 constraint as the venv path: this image is a CUDA 13 build,
+    # so the host driver must be r580+ (or carry cuda-compat-13-0).
     image: vllm/vllm-openai:v0.29.0
     depends_on:
       model-downloader:

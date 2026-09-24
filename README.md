@@ -97,10 +97,15 @@ versions, so the lockfile pins each to the newest build it publishes:
 | `cu128` | 2.11.0 | — | research on a CUDA 12 driver, older torch |
 | `cpu` | 2.13.0+cpu | — | no GPU |
 
-**Only `cu130` carries vLLM.** Its PyPI wheel links `libcudart.so.13`, so it runs
-only against a CUDA 13 torch; the cu12x channels ship `libcudart.so.12` and would
-install a vLLM that resolves fine and then fails on import. Tying vLLM to `cu130`
-makes that combination unrepresentable rather than a runtime surprise.
+**Only `cu130` carries vLLM.** Every PyPI vLLM wheel that supports Python 3.14 is
+a CUDA 13 build, so it links `libcudart.so.13`; the cu12x channels ship
+`libcudart.so.12` and would install a vLLM that resolves fine and then fails on
+import. Tying vLLM to `cu130` makes that combination unrepresentable.
+
+Serving therefore also needs an **NVIDIA driver r580+** on the host — or
+`cuda-compat-13-0` on a datacenter GPU with an older one. `llm-serve/serve.sh`
+checks this before it downloads anything. See
+[docs/architecture/openjev-specialists.md](docs/architecture/openjev-specialists.md).
 
 ### OpenJev (optional probabilistic specialists)
 

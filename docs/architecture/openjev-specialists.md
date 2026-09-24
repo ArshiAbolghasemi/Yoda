@@ -90,22 +90,35 @@ research stack and the server:
 uv sync --extra cu130     # serving and research, one environment
 ```
 
-It lives there rather than in the main dependencies because its PyPI wheel links
-`libcudart.so.13` — a CUDA 13 torch is the only one it runs against. The
+It lives there rather than in the main dependencies because every vLLM wheel on
+PyPI that supports Python 3.14 is built against **CUDA 13** — PyTorch moved its
+default PyPI build to CUDA 13 at torch 2.11.0, and vLLM followed. The
 `cu126`/`cu128`/`cu129` channels ship `libcudart.so.12`, so a vLLM installed
 beside them resolves cleanly and then dies at import with
 `ImportError: libcudart.so.13: cannot open shared object file`. Scoping it to
 `cu130` makes that pairing impossible to produce.
 
-A `sys_platform` marker covers the other gap: vLLM publishes no macOS wheels
-(`nvidia-cudnn-frontend` is Linux/Windows only), so on a Mac the sync succeeds
-and skips it — research works, serving needs a Linux box with a CUDA 13 driver.
+### The GPU host needs driver r580+
 
-`llm-serve/serve.sh` **installs nothing**. It checks that vLLM is importable and
-tells you which `uv sync` to run if it is not, so the environment is only ever
-changed by a command you typed. It also requires the repo-root `.env` — the same
-file `docker-compose.yml` reads — and refuses to start without it, since
-defaulting would serve with no HF token and an uncalibrated readout.
+CUDA 13 is a two-sided requirement, and only the first half comes from `uv sync`:
+
+| Half | Provided by | Symptom when missing |
+|---|---|---|
+| `libcudart.so.13` (userspace) | the cu130 torch wheel | `ImportError: libcudart.so.13` |
+| driver r580+ (kernel) | the **host**, not the venv | `CUDA driver version is insufficient` |
+
+An older datacenter GPU host — an A100 on r570, say — can still run CUDA 13
+through NVIDIA's forward-compatibility package, which supplies a newer user-mode
+driver on top of the older kernel module:
+
+```bash
+apt-get install -y cuda-compat-13-0
+```
+
+`serve.sh` checks `nvidia-smi` before it starts anything, adds
+`/usr/local/cuda/compat` to `LD_LIBRARY_PATH` when it is present, and refuses to
+launch with the exact remedy when the driver is too old and the compat libs are
+absent. Failing there costs a second; failing after a 55 GB download does not.
 
 Both paths use the serving configuration published on the model card:
 

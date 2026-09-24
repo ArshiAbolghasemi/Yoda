@@ -43,6 +43,42 @@ mkdir -p "$LOGS" "$PIDS"
 
 # ---------------------------------------------------------------- environment
 
+# vLLM's wheel is built against CUDA 13, so it needs two separate things:
+#
+#   libcudart.so.13   userspace, shipped inside the cu130 torch wheel
+#   driver r580+      kernel side, the host's NVIDIA driver
+#
+# A datacenter GPU on an older driver can still run CUDA 13 through NVIDIA's
+# forward-compatibility package, which supplies a newer user-mode driver that
+# talks to the older kernel module. Put it on the path if it is installed;
+# without it a pre-r580 host cannot run this build at all.
+CUDA_COMPAT=$(ls -d /usr/local/cuda/compat /usr/local/cuda-13*/compat 2>/dev/null | head -1 || true)
+if [ -n "$CUDA_COMPAT" ]; then
+  export LD_LIBRARY_PATH="$CUDA_COMPAT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+driver_major() { nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
+  | head -1 | cut -d. -f1; }
+
+# The driver story, printed once so a failure downstream is already explained.
+check_driver() {
+  local major; major=$(driver_major || true)   # absent nvidia-smi must not abort
+  [ -n "$major" ] || die "no nvidia-smi - this script serves on an NVIDIA GPU"
+  if [ "$major" -ge 580 ]; then
+    say "driver r$major - CUDA 13 native"
+  elif [ -n "$CUDA_COMPAT" ]; then
+    say "driver r$major (<580) - using forward-compat libs in $CUDA_COMPAT"
+  else
+    die "driver r$major is below the r580 that CUDA 13 requires, and no
+  forward-compatibility libs are installed. vLLM's wheel is a CUDA 13 build,
+  so it cannot run here as-is. Either:
+    * install the compat package (datacenter GPUs only, A100 included):
+        apt-get install -y cuda-compat-13-0
+      then re-run; this script picks it up from /usr/local/cuda/compat
+    * or update the host driver to r580+."
+  fi
+}
+
 # Check only - this script installs nothing. It reports what actually went
 # wrong rather than guessing: "vllm is missing" and "vllm is installed but
 # fails to import" are different problems with different fixes, and hiding
@@ -66,23 +102,20 @@ print("vllm:   ok")
   case "$out" in
     *"No module named 'vllm'"*)
       die "vLLM is not in this environment. It ships with the cu130 extra only:
-    (cd $ROOT && uv sync --extra cu130)
-  Its wheel links libcudart.so.13, so a CUDA 13 torch is the only one it runs
-  against - cu126/cu128/cu129 deliberately do not carry it. Linux/Windows
-  only; there are no macOS wheels." ;;
-    *)
-      case "$out" in
-        *libcudart.so.12*|*libcudart.so.13*|*libcuda*)
-          die "vLLM found the wrong CUDA runtime - see the error above.
-  Its wheel links libcudart.so.13, which only the CUDA 13 torch provides.
-  This environment has a CUDA 12 torch (cu126/cu128/cu129). Re-sync:
-    (cd $ROOT && uv sync --extra cu130)
-  If this box's driver is older than CUDA 13 (nvidia-smi), it cannot run the
-  PyPI vLLM build at all; serve from a CUDA 13 host." ;;
-      esac
-      die "vLLM is installed but will not import (exit $status) - see the error
-  above, which names the interpreter and the torch it found. Re-sync cleanly:
     (cd $ROOT && uv sync --extra cu130)" ;;
+    *libcudart.so.13*)
+      die "this environment has a CUDA 12 torch; vLLM needs the CUDA 13 one.
+  libcudart.so.13 ships inside the cu130 torch wheel, so:
+    (cd $ROOT && uv sync --extra cu130)
+  cu126/cu128/cu129 carry libcudart.so.12 and deliberately do not pull vLLM." ;;
+    *"CUDA driver version is insufficient"*|*libcuda.so*)
+      die "the CUDA 13 build loaded but the driver will not accept it - see
+  above. Install the forward-compat package and re-run:
+    apt-get install -y cuda-compat-13-0
+  or update the host driver to r580+." ;;
+    *)
+      die "vLLM is installed but will not import (exit $status) - see the
+  error above, which names the interpreter and the torch it found." ;;
   esac
 }
 
@@ -167,10 +200,10 @@ stop_one() {
 
 case "${1:-start}" in
   download)
-    ensure_deps; download ;;
+    check_driver; ensure_deps; download ;;
 
   start)
-    ensure_deps; download; start_vllm; start_shim
+    check_driver; ensure_deps; download; start_vllm; start_shim
     cat <<MSG
 
 OpenJev is serving.
