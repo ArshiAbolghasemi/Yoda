@@ -84,7 +84,7 @@ Requires Python ≥ 3.14 and [uv](https://docs.astral.sh/uv/). `.env` is git-ign
 specific build:
 
 ```bash
-uv sync --extra cu132     # or cu130, cu129, cu128, cu126, cpu
+uv sync --extra cu130     # or cu132, cu129, cu128, cu126, cpu
 ```
 
 The CUDA extras are mutually exclusive. The channels cap at different torch
@@ -92,16 +92,23 @@ versions, so the lockfile pins each to the newest build it publishes:
 
 | Extra | torch | vLLM | Use for |
 |---|---|---|---|
-| `cu132` | 2.13.0+cu132 | 0.29.0 | serving OpenJev **and** research |
 | `cu130` | 2.13.0+cu130 | 0.29.0 | serving OpenJev **and** research |
+| `cu132` | 2.13.0+cu132 | — | research on CUDA 13.2 |
 | `cu129` · `cu126` | 2.13.0 | — | research on a CUDA 12 driver |
 | `cu128` | 2.11.0 | — | research on a CUDA 12 driver, older torch |
 | `cpu` | 2.13.0+cpu | — | no GPU |
 
-**Only the CUDA 13 channels carry vLLM.** Every PyPI vLLM wheel that supports Python 3.14 is
+**Only `cu130` carries vLLM.** Every PyPI vLLM wheel that supports Python 3.14 is
 a CUDA 13 build, so it links `libcudart.so.13`; the cu12x channels ship
 `libcudart.so.12` and would install a vLLM that resolves fine and then fails on
-import. Tying vLLM to `cu130`/`cu132` makes that combination unrepresentable.
+import. vLLM also pulls `torchaudio`/`torchvision`/`torchcodec`, which refuse to
+load unless their CUDA matches torch's exactly — and `cu130` is the only channel
+publishing all four. So `cu130` carries the whole serving set, pinned to that one
+index, and every broken mix is unrepresentable rather than a runtime surprise.
+
+`cu132` is research-only for that reason: PyTorch publishes no `+cu132`
+torchaudio, so a vLLM there dies with *"PyTorch has CUDA version 13.2 whereas
+TorchAudio has CUDA version 13.0"*.
 
 Serving therefore also needs an **NVIDIA driver r580+** on the host — or
 `cuda-compat-13-0` on a datacenter GPU with an older one. `llm-serve/serve.sh`

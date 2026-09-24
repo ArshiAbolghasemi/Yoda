@@ -30,30 +30,34 @@ dependencies = [
 
 [project.optional-dependencies]
 # Torch build selection. Pick exactly one; they are mutually exclusive.
-#   uv sync --extra cu132      (Linux/Windows CUDA 13.2)
-#   uv sync --extra cu130      (Linux/Windows CUDA 13.0)
+#   uv sync --extra cu130      (Linux/Windows CUDA 13.0 - the serving build)
+#   uv sync --extra cu132      (Linux/Windows CUDA 13.2, research only)
 #   uv sync --extra cu129      (Linux/Windows CUDA 12.9, research only)
 #   uv sync --extra cpu        (CPU-only wheels)
-# Serving needs one of the two CUDA 13 channels - they are the only ones that
-# carry vLLM. cu126/cu128/cu129 are research-only builds. With no extra, torch
-# resolves from PyPI (CUDA 13 on Linux, MPS/CPU on macOS).
+# Only cu130 carries vLLM; every other channel is research-only. With no extra,
+# torch resolves from PyPI (CUDA 13 on Linux, MPS/CPU on macOS).
 cpu = ["torch>=2.8.0"]
 cu126 = ["torch>=2.8.0"]
 cu128 = ["torch>=2.8.0"]
 cu129 = ["torch>=2.8.0"]
-# vLLM rides with the CUDA 13 channels and nowhere else: its PyPI wheel links
-# libcudart.so.13, so it runs only against a CUDA 13 torch. The cu126/cu128/
-# cu129 channels ship libcudart.so.12, so installing vLLM beside them resolves
-# cleanly and then dies on import. Scoping it here makes that unrepresentable.
+# vLLM rides with cu130 and nowhere else. Its PyPI wheel links libcudart.so.13,
+# so a CUDA 12 torch (cu126/cu128/cu129) fails at import; and it pulls
+# torchaudio/torchvision, which assert an exact CUDA match against torch, so
+# cu130 is the one channel publishing a consistent set of all three. Scoping it
+# here makes every broken combination unrepresentable.
 # No macOS wheels either - nvidia-cudnn-frontend is linux/windows only.
 cu130 = [
     "torch>=2.8.0",
+    "torchaudio; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchcodec; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchvision; sys_platform == 'linux' or sys_platform == 'win32'",
     "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
-cu132 = [
-    "torch>=2.8.0",
-    "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
-]
+# cu132 is research-only: torchaudio publishes no +cu132 build, and vLLM
+# requires torchaudio, which refuses to load against a torch compiled for a
+# different CUDA ("PyTorch has CUDA version 13.2 whereas TorchAudio has 13.0").
+# Serve from cu130 until that channel appears.
+cu132 = ["torch>=2.8.0"]
 
 [dependency-groups]
 dev = [
@@ -112,6 +116,18 @@ torch = [
     { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu132", extra = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+# vLLM pulls these, and torchaudio hard-fails when its CUDA differs from
+# torch's. Left to PyPI they track the default channel (13.0) and silently
+# mismatch a non-default torch, so they follow torch's index instead.
+torchaudio = [
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchcodec = [
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [tool.pytest.ini_options]
