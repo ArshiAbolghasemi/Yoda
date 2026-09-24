@@ -115,7 +115,8 @@ uv run main.py data                    # rebuild the dataset from scratch
 ```
 
 Both training scripts take `--gate tailvoi|accuracy|attention|equal_weight|cio`
-and `--run-id NAME`; the non-RL script also takes `--policy static|cio`. Each run writes `data/processed/runs/<run_id>/` containing
+and `--run-id NAME`. Choosing `--gate cio` hands the whole decision to the
+CIO agent — gate, risk stance and weights. Each run writes `data/processed/runs/<run_id>/` containing
 `weights.parquet`, `ledger.parquet`, `run_meta.json`, four PNGs and a `report.html`.
 
 Procedures are documented in full in

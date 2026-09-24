@@ -33,7 +33,6 @@ def run_tail_voli_risk(
     *,
     run_id: str = "tail_voli_risk",
     gate: str = "tailvoi",
-    policy: str = "static",
     panel: AlignedPanel | None = None,
     features: dict[str, np.ndarray] | None = None,
     optimizer: DROCVaROptimizer | None = None,
@@ -45,12 +44,11 @@ def run_tail_voli_risk(
     alpha = config.research.optimizer.alpha
 
     def make_policy(stack: AllocationStack, train: np.ndarray, val: np.ndarray):
-        # The seam. A fixed config-driven rule by default; ``policy="cio"``
-        # hands it to the CIO agent, and the RL pipeline swaps the same call.
-        if policy == "cio":
-            if isinstance(stack.gate, CIOAgent):
-                return stack.gate  # one decision drives both sockets
-            return CIOAgent(config, stack.sources)
+        # The seam. A fixed config-driven rule, unless the CIO is installed -
+        # it owns the whole decision, so it fills this socket too rather than a
+        # second policy contradicting it. The RL pipeline swaps the same call.
+        if isinstance(stack.gate, CIOAgent):
+            return stack.gate
         return StaticRiskPolicy(config.research.static_policy, alpha=alpha)
 
     logger.info("tail_voli_risk_start run=%s gate=%s", run_id, gate)
@@ -63,6 +61,6 @@ def run_tail_voli_risk(
         make_policy=make_policy,
         features=features,
         optimizer=optimizer,
-        label=label or f"{policy}/{gate}",
+        label=label or f"static/{gate}",
     )
     return evaluate(config, run_id, panel=panel, make_plots=make_plots)

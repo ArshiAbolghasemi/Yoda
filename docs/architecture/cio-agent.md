@@ -105,8 +105,9 @@ run. The log says so explicitly:
 cio_installed gate+policy+optimizer replaced by the CIO
 ```
 
-`--policy cio` reuses that same instance rather than constructing a second one,
-so one decision drives every socket instead of three that could disagree.
+There is no separate `--policy cio`: the CIO is all-or-nothing. A half-CIO
+filling only the policy socket would be a volatility-targeting rule wearing a
+misleading name, and `policy_vol_target` already covers that comparison.
 
 ## Settings
 
@@ -120,9 +121,10 @@ so one decision drives every socket instead of three that could disagree.
 
 Whether one agent allocating attention, risk and capital together beats three
 components each measured on its own objective is exactly the kind of claim this
-repository is built to test rather than assert. `gate_cio` and `cio_full` sit in
-the matrix on identical splits, and the answer — positive, neutral or negative —
-is whatever the table says.
+repository is built to test rather than assert. `cio_full` sits in the matrix
+against `policy_static`, `policy_rl` and `policy_vol_target` on identical
+splits, and the answer — positive, neutral or negative — is whatever the table
+says.
 
 ## See also
 

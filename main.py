@@ -28,12 +28,11 @@ def main() -> None:
     sub.add_parser("data", help="run the dataset pipeline")
     for name in ("tail-voli-risk", "tail-voli-risk-rl"):
         run = sub.add_parser(name, help=f"run {name}")
-        run.add_argument("--gate", default="tailvoi")
         run.add_argument(
-            "--policy",
-            default="static",
-            choices=["static", "cio"],
-            help="risk-parameter policy (the RL pipeline always uses SAC)",
+            "--gate",
+            default="tailvoi",
+            help="tailvoi | accuracy | attention | equal_weight | cio "
+            "(cio takes over the gate, the policy and the allocator)",
         )
         run.add_argument("--run-id", default=name.replace("-", "_"))
     specialists = sub.add_parser(
@@ -46,7 +45,7 @@ def main() -> None:
     experiments.add_argument(
         "--families",
         nargs="+",
-        default=["gate", "system", "policy", "openjev", "sources", "horizon"],
+        default=["gate", "optimizer", "policy", "openjev", "sources", "horizon"],
         help="which experiment families to run",
     )
     arguments = parser.parse_args()
@@ -77,12 +76,7 @@ def main() -> None:
     else:
         static = arguments.command == "tail-voli-risk"
         evaluation = (
-            run_tail_voli_risk(
-                config,
-                run_id=arguments.run_id,
-                gate=arguments.gate,
-                policy=arguments.policy,
-            )
+            run_tail_voli_risk(config, run_id=arguments.run_id, gate=arguments.gate)
             if static
             else run_tail_voli_risk_rl(
                 config, run_id=arguments.run_id, gate=arguments.gate

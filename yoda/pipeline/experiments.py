@@ -82,7 +82,6 @@ class Arm:
     family: str
     gate: str = "tailvoi"
     rl: bool = False
-    policy: str = "static"
     sources: tuple[str, ...] | None = None  # None keeps the configured set
     backends: dict[str, str] = field(default_factory=dict)  # channel -> backend
     horizon: int | None = None
@@ -157,7 +156,6 @@ def default_arms(gate: str = "tailvoi") -> list[Arm]:
         Arm("gate_accuracy", "Accuracy", "gate", gate="accuracy"),
         Arm("gate_attention", "Attention", "gate", gate="attention"),
         Arm("gate_equal", "EqualWeight", "gate", gate="equal_weight"),
-        Arm("gate_cio", "CIO agent", "gate", gate="cio"),
         # -- what the distributional robustness is worth -------------------------
         Arm("opt_wasserstein", "Wasserstein DRO", "optimizer", gate=gate),
         Arm(
@@ -177,7 +175,6 @@ def default_arms(gate: str = "tailvoi") -> list[Arm]:
         # -- static policy vs RL controller -------------------------------------
         Arm("policy_static", "Static policy", "policy", gate=gate),
         Arm("policy_rl", "RL policy", "policy", gate=gate, rl=True),
-        Arm("policy_cio", "CIO policy", "policy", gate=gate, policy="cio"),
         Arm(
             "policy_vol_target",
             "Vol-target policy",
@@ -185,7 +182,9 @@ def default_arms(gate: str = "tailvoi") -> list[Arm]:
             gate=gate,
             overrides={"static_policy": {"vol_target": 0.02}},
         ),
-        Arm("cio_full", "CIO gate + policy", "policy", gate="cio", policy="cio"),
+        # Selecting the CIO gate installs it as policy and allocator too:
+        # the whole decision in one agent, with no Tail-VoI and no DRO-CVaR.
+        Arm("cio_full", "CIO (whole stack)", "policy", gate="cio"),
         # -- conventional vs OpenJev specialists ---------------------------------
         *_jev_arms(),
         # -- agent-removal ablations --------------------------------------------
@@ -262,7 +261,6 @@ def fingerprint(config: Config, arm: Arm) -> tuple:
     research = config.research
     return (
         arm.gate,
-        arm.policy,
         arm.rl,
         research.tailvoi.sources,
         research.panel.target_horizon,
@@ -434,7 +432,6 @@ def run_experiments(
                 optimizer=arm.optimizer() if arm.optimizer else None,
                 label=arm.label,
                 make_plots=False,
-                **({} if arm.rl else {"policy": arm.policy}),
             )
             completed.append(arm.run_id)
             executed[mark] = arm.run_id
