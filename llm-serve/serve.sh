@@ -4,8 +4,9 @@
 #   TailRiskFlow specialists ──► decision shim :3000 ──► vLLM :8000 ──► openjev/openjev
 #
 # Reads the project's root .env, the same file docker-compose uses, so the
-# whole project is configured in one place. vLLM is a main dependency of the
-# project, so it runs out of the project environment - no second virtualenv.
+# whole project is configured in one place. This script never installs
+# anything: vLLM is a main dependency of the project, so it runs out of the
+# project environment, and if it is missing the script says what to run.
 #
 #   ./serve.sh              start both, wait until ready, stay in foreground
 #   ./serve.sh start -d     start both in the background
@@ -16,8 +17,17 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# Serving settings live in the project's single .env at the repo root.
-[ -f ../.env ] && { set -a; . ../.env; set +a; }
+ROOT=$(cd .. && pwd)
+
+say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Serving settings live in the project's single .env at the repo root - the
+# same file docker-compose reads. Missing is fatal: falling back to defaults
+# would serve with no HF token and an uncalibrated readout. Loaded before the
+# defaults below so anything set there wins.
+[ -f "$ROOT/.env" ] || die "no $ROOT/.env - fill in the repo-root .env first"
+set -a; . "$ROOT/.env"; set +a
 
 MODEL_REPO="${MODEL_REPO:-openjev/openjev}"
 MODEL_DIR="${MODEL_DIR:-./openjev}"
@@ -31,18 +41,16 @@ LOGS=./logs
 PIDS=./run
 mkdir -p "$LOGS" "$PIDS"
 
-say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
-die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
-
 # ---------------------------------------------------------------- environment
 
+# Check only - this script installs nothing.
 ensure_deps() {
-  if ! uv run --no-sync --active python -c "import vllm" >/dev/null 2>&1; then
-    say "vLLM missing from the project environment - syncing"
-    # vLLM is a main dependency; it installs on Linux/Windows only (no macOS
-    # wheels). Pass the CUDA extra you want, e.g. SYNC_EXTRA=cu130.
-    uv sync ${SYNC_EXTRA:+--extra "$SYNC_EXTRA"}
-  fi
+  run python -c "import vllm" >/dev/null 2>&1 || die \
+    "vLLM is not in the project environment. Install it yourself with
+    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu126 / cpu
+  vLLM publishes no macOS wheels, so serving needs a Linux box."
+  command -v hf >/dev/null 2>&1 || run hf --help >/dev/null 2>&1 || die \
+    "the 'hf' CLI is missing - (cd $ROOT && uv sync) should provide it"
 }
 
 run() { uv run --no-sync --active "$@"; }

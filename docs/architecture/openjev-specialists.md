@@ -94,6 +94,12 @@ It carries a `sys_platform` marker because vLLM publishes no macOS wheels
 (`nvidia-cudnn-frontend` is Linux/Windows only) — on a Mac the sync succeeds and
 simply skips it, so research still works and serving needs a Linux box.
 
+`llm-serve/serve.sh` **installs nothing**. It checks that vLLM is importable and
+tells you which `uv sync` to run if it is not, so the environment is only ever
+changed by a command you typed. It also requires the repo-root `.env` — the same
+file `docker-compose.yml` reads — and refuses to start without it, since
+defaulting would serve with no HF token and an uncalibrated readout.
+
 Both paths use the serving configuration published on the model card:
 
 | Setting | Value |
