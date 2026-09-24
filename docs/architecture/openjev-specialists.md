@@ -59,6 +59,13 @@ Three services: a one-shot `model-downloader` that pulls the weights *and*
 `openjev-shim` in front of it. `vllm` has a health check and the shim waits on
 it, so `up -d` is safe to run cold.
 
+Each service declares `env_file: ../.env`, so a bare `docker compose up -d`
+already reaches the containers with `HF_TOKEN`, `SHIM_TOKEN` and the readout
+constants — no flag to remember. The compose-level knobs (ports, `GPU_COUNT`,
+`GPU_MEMORY_UTILIZATION`) are *interpolated* rather than injected, so they fall
+back to the defaults in the file; add `--env-file ../.env` as well if you want
+`.env` to override those too.
+
 Needs an NVIDIA GPU with the container toolkit. OpenJev 27B at FP8 wants roughly
 30 GB of VRAM at this context length — lower `MAX_MODEL_LEN` or
 `GPU_MEMORY_UTILIZATION` if you are tighter.
@@ -73,9 +80,12 @@ cd llm-serve
 ./serve.sh stop
 ```
 
-Reads the same `llm-serve/.env` the compose file uses, so both paths are
-configured once. vLLM is installed into `llm-serve/.venv` rather than the
-research environment — it pins torch hard and the two would fight.
+Reads the project's **root `.env`** — the same file the compose stack uses, so
+the whole project is configured in one place. There is no `llm-serve/.env`.
+
+vLLM is installed into `llm-serve/.venv` rather than the research environment:
+it pins torch hard, and a later `uv sync` would otherwise reshuffle torch
+underneath the RL code.
 
 Both paths use the serving configuration published on the model card:
 
