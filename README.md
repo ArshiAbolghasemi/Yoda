@@ -84,13 +84,22 @@ Requires Python ≥ 3.14 and [uv](https://docs.astral.sh/uv/). `.env` is git-ign
 specific build:
 
 ```bash
-uv sync --extra cu130     # or cu128, cu126, cpu
+uv sync --extra cu130     # or cu129, cu128, cu126, cpu
 ```
 
 The CUDA extras are mutually exclusive. The channels cap at different torch
-versions — `cu126`/`cu130` carry 2.14, `cu128` caps at 2.11 — so the lockfile pins
-each to the newest build it actually publishes. `cu129` is not offered: that channel
-stops at torch 2.13, below what stable-baselines3 needs here.
+versions, so the lockfile pins each to the newest build it actually publishes —
+and because vLLM pins `torch` exactly, the vLLM version follows from the channel:
+
+| Extra | torch | vLLM |
+|---|---|---|
+| `cpu` · `cu126` · `cu129` · `cu130` | 2.13.0 | 0.29.0 |
+| `cu128` | 2.11.0 | 0.26.0 |
+
+`cu128` publishes no torch 2.13.0, and vLLM 0.29.0 requires exactly that, so the
+cu128 environment resolves to the last vLLM built against 2.11. Prefer `cu129` on
+CUDA 12.8 hardware if you want current vLLM — CUDA minor versions are
+forward-compatible within 12.x.
 
 ### OpenJev (optional probabilistic specialists)
 

@@ -4,8 +4,8 @@
 #   TailRiskFlow specialists ──► decision shim :3000 ──► vLLM :8000 ──► openjev/openjev
 #
 # Reads the project's root .env, the same file docker-compose uses, so the
-# whole project is configured in one place. vLLM lives in its own virtualenv under llm-serve/.venv: it
-# pins torch hard and would fight the research environment if installed there.
+# whole project is configured in one place. vLLM is a main dependency of the
+# project, so it runs out of the project environment - no second virtualenv.
 #
 #   ./serve.sh              start both, wait until ready, stay in foreground
 #   ./serve.sh start -d     start both in the background
@@ -38,10 +38,10 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 ensure_deps() {
   if ! uv run --no-sync --active python -c "import vllm" >/dev/null 2>&1; then
-    say "installing the serving extra into the project environment"
-    # vLLM pins torch exactly and caps numpy, so `serve` conflicts with the
-    # CUDA extras: syncing it replaces a cu* build rather than joining it.
-    uv sync --extra serve
+    say "vLLM missing from the project environment - syncing"
+    # vLLM is a main dependency; it installs on Linux/Windows only (no macOS
+    # wheels). Pass the CUDA extra you want, e.g. SYNC_EXTRA=cu130.
+    uv sync ${SYNC_EXTRA:+--extra "$SYNC_EXTRA"}
   fi
 }
 

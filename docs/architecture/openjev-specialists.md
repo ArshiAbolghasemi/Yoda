@@ -83,18 +83,16 @@ cd llm-serve
 Reads the project's **root `.env`** — the same file the compose stack uses, so
 the whole project is configured in one place. There is no `llm-serve/.env`.
 
-vLLM comes from the project's own `serve` extra, installed on first run. It
-pins `torch` exactly and caps `numpy` below 2.5, so `serve` is declared
-**mutually exclusive** with the CUDA extras — pick one per machine:
+vLLM is a **main dependency** of the project, so one `uv sync` gives you both
+the research stack and the server:
 
 ```bash
-uv sync --extra serve     # the box that serves OpenJev
-uv sync --extra cu130     # the box that runs the research
+uv sync --extra cu130     # serving and research, one environment
 ```
 
-Syncing one *replaces* the other rather than joining it. On a single machine
-doing both, serve first, then re-sync the CUDA extra when you go back to
-training.
+It carries a `sys_platform` marker because vLLM publishes no macOS wheels
+(`nvidia-cudnn-frontend` is Linux/Windows only) — on a Mac the sync succeeds and
+simply skips it, so research still works and serving needs a Linux box.
 
 Both paths use the serving configuration published on the model card:
 
@@ -106,7 +104,7 @@ Both paths use the serving configuration published on the model card:
 | max concurrent sequences | 256 |
 | max logprobs | 64 |
 | prefill backend | `--gdn-prefill-backend triton` |
-| pinned versions | `vllm==0.29.0`, `openai==3.16.2`, `httpx==0.28.1` |
+| pinned versions | `vllm>=0.26` (0.29.0 everywhere except `cu128`), `openai==3.16.2`, `httpx==0.28.1` |
 
 ### Readout calibration
 
