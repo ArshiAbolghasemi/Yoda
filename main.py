@@ -30,9 +30,9 @@ def main() -> None:
         run = sub.add_parser(name, help=f"run {name}")
         run.add_argument(
             "--gate",
-            default="tailvoi",
-            help="tailvoi | accuracy | attention | equal_weight | cio "
-            "(cio takes over the gate, the policy and the allocator)",
+            default=None,
+            help="tailvoi | accuracy | attention | equal_weight "
+            "(default: TAILVOI__GATE)",
         )
         run.add_argument("--run-id", default=name.replace("-", "_"))
     specialists = sub.add_parser(
@@ -42,6 +42,14 @@ def main() -> None:
         "--channels", nargs="+", default=["technical", "volatility", "news"]
     )
     experiments = sub.add_parser("experiments", help="run the baselines and ablations")
+    experiments.add_argument(
+        "--policies",
+        nargs="+",
+        default=["static"],
+        choices=["static", "rl"],
+        help="risk controllers to cross the matrix with; "
+        "'--policies static rl' runs every arm under both",
+    )
     experiments.add_argument(
         "--families",
         nargs="+",
@@ -72,7 +80,11 @@ def main() -> None:
         return
 
     if arguments.command == "experiments":
-        evaluation = run_experiments(config, families=tuple(arguments.families))
+        evaluation = run_experiments(
+            config,
+            families=tuple(arguments.families),
+            policies=tuple(arguments.policies),
+        )
     else:
         static = arguments.command == "tail-voli-risk"
         evaluation = (

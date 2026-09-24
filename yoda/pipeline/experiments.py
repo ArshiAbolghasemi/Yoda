@@ -7,13 +7,15 @@ rows is a difference in the thing being varied and nothing else.
 Families
 --------
 ``gate``
-    Tail-VoI vs Accuracy vs Attention vs EqualWeight. Does gating on *tail
-    value* beat gating on accuracy, on learned attention, and on nothing?
+    Tail-VoI vs Accuracy vs Attention vs EqualWeight, everything else pinned.
+    The headline: does gating on *tail value* beat gating on accuracy, on
+    learned attention, and on nothing?
 ``optimizer``
     The DRO robustification itself: Wasserstein, moment-based, or off. What is
     the distributional robustness actually worth?
 ``policy``
-    Static risk rule vs the SAC controller, same gate.
+    The static risk rule vs the SAC controller - the only thing that varies
+    inside the CIO.
 ``openjev``
     Conventional specialists versus OpenJev probabilistic specialists, one
     channel at a time and in every combination. **The primary research
@@ -80,7 +82,7 @@ class Arm:
     run_id: str
     label: str
     family: str
-    gate: str = "tailvoi"
+    gate: str | None = None  # None = the configured TAILVOI__GATE
     rl: bool = False
     sources: tuple[str, ...] | None = None  # None keeps the configured set
     backends: dict[str, str] = field(default_factory=dict)  # channel -> backend
@@ -149,42 +151,33 @@ def _source_arms() -> list[Arm]:
     return arms
 
 
-def default_arms(gate: str = "tailvoi") -> list[Arm]:
+def default_arms() -> list[Arm]:
     return [
-        # -- headline gate ablation -------------------------------------------
+        # -- headline gate ablation: what makes Tail-VoI a claim -----------------
+        # Each control closes one escape route. equal_weight: does gating do
+        # anything at all? accuracy: is this just accuracy weighting? attention:
+        # is this just any fitted gate beating a fixed one?
         Arm("gate_tailvoi", "TailVoI", "gate", gate="tailvoi"),
         Arm("gate_accuracy", "Accuracy", "gate", gate="accuracy"),
         Arm("gate_attention", "Attention", "gate", gate="attention"),
         Arm("gate_equal", "EqualWeight", "gate", gate="equal_weight"),
         # -- what the distributional robustness is worth -------------------------
-        Arm("opt_wasserstein", "Wasserstein DRO", "optimizer", gate=gate),
+        Arm("opt_wasserstein", "Wasserstein DRO", "optimizer"),
         Arm(
             "opt_moment",
             "Moment DRO",
             "optimizer",
-            gate=gate,
             overrides={"optimizer": {"dro": "moment"}},
         ),
         Arm(
             "opt_plain_cvar",
             "Plain CVaR",
             "optimizer",
-            gate=gate,
             overrides={"optimizer": {"dro": "none"}},
         ),
         # -- static policy vs RL controller -------------------------------------
-        Arm("policy_static", "Static policy", "policy", gate=gate),
-        Arm("policy_rl", "RL policy", "policy", gate=gate, rl=True),
-        Arm(
-            "policy_vol_target",
-            "Vol-target policy",
-            "policy",
-            gate=gate,
-            overrides={"static_policy": {"vol_target": 0.02}},
-        ),
-        # Selecting the CIO gate installs it as policy and allocator too:
-        # the whole decision in one agent, with no Tail-VoI and no DRO-CVaR.
-        Arm("cio_full", "CIO (whole stack)", "policy", gate="cio"),
+        Arm("policy_static", "Static policy", "policy"),
+        Arm("policy_rl", "RL policy", "policy", rl=True),
         # -- conventional vs OpenJev specialists ---------------------------------
         *_jev_arms(),
         # -- agent-removal ablations --------------------------------------------
@@ -195,6 +188,45 @@ def default_arms(gate: str = "tailvoi") -> list[Arm]:
             for days in (1, 5, 10, 20)
         ],
     ]
+
+
+def expand_policies(
+    arms: list[Arm], policies: tuple[str, ...] = ("static", "rl")
+) -> list[Arm]:
+    """Cross every arm with each risk policy.
+
+    The policy is the one seam between the two pipelines, so running the whole
+    matrix under both answers a question a single pass cannot: does an arm's
+    effect survive the change of risk controller, or was it an artefact of the
+    static rule?
+
+    ``policy`` arms are left alone - they already vary exactly this, and
+    duplicating them would only produce aliases of themselves.
+    """
+    unknown = set(policies) - {"static", "rl"}
+    if unknown:
+        raise ValueError(f"Unknown policies: {sorted(unknown)}")
+
+    expanded: list[Arm] = []
+    for arm in arms:
+        if arm.family == "policy" or len(policies) == 1:
+            expanded.append(
+                dataclasses.replace(arm, rl=(policies[0] == "rl"))
+                if arm.family != "policy" and len(policies) == 1
+                else arm
+            )
+            continue
+        for policy in policies:
+            rl = policy == "rl"
+            expanded.append(
+                dataclasses.replace(
+                    arm,
+                    run_id=f"{arm.run_id}__{policy}",
+                    label=f"{arm.label} [{policy}]",
+                    rl=rl,
+                )
+            )
+    return expanded
 
 
 def _apply(config: Config, arm: Arm) -> Config:
@@ -260,7 +292,7 @@ def fingerprint(config: Config, arm: Arm) -> tuple:
     """
     research = config.research
     return (
-        arm.gate,
+        arm.gate or config.research.tailvoi.gate,
         arm.rl,
         research.tailvoi.sources,
         research.panel.target_horizon,
@@ -389,12 +421,26 @@ def run_experiments(
     *,
     arms: list[Arm] | None = None,
     families: tuple[str, ...] = FAMILIES,
+    policies: tuple[str, ...] = ("static",),
     panel: AlignedPanel | None = None,
     skip_failures: bool = True,
 ) -> Evaluation:
-    """Run every selected arm and score them all on identical intervals."""
+    """Run every selected arm and score them all on identical intervals.
+
+    ``policies`` crosses the matrix with each risk controller. ``("static",)``
+    is the default because every RL arm trains a SAC agent per fold, and
+    ``("static", "rl")`` therefore roughly triples the wall clock rather than
+    doubling it.
+    """
     panel = panel or build_panel(config)
     selected = [arm for arm in (arms or default_arms()) if arm.family in families]
+    selected = expand_policies(selected, policies)
+    logger.info(
+        "experiments_planned arms=%d policies=%s families=%s",
+        len(selected),
+        ",".join(policies),
+        ",".join(families),
+    )
     cache: dict = {}
     completed: list[str] = []
     executed: dict[tuple, str] = {}
@@ -426,8 +472,8 @@ def run_experiments(
             run(
                 arm_config,
                 run_id=arm.run_id,
-                gate=arm.gate,
                 panel=arm_panel,
+                gate=arm.gate,
                 features=_shared_features(arm_config, arm_panel, cache),
                 optimizer=arm.optimizer() if arm.optimizer else None,
                 label=arm.label,

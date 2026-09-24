@@ -47,7 +47,6 @@ Five decision points, each independently swappable, each with its own family:
 |---|---|---|
 | specialists | What does each channel see? | `openjev` |
 | which channels exist | Is this channel worth anything? | `sources` |
-| gate | Whom do we trust today? | `gate` |
 | policy | How hard do we act on it? | `policy` |
 | allocator | Is the robustness worth it? | `optimizer` |
 | horizon | Over what period? | `horizon` |
@@ -73,48 +72,7 @@ the robustification and nothing else.
 | `opt_moment` | `moment` | `−μ_sᵀw + radius·√((1−α)/α)·‖Σ^½w‖₂` — worst case over all distributions matching the scenario mean and covariance. |
 | `opt_plain_cvar` | `none` | Plain empirical CVaR. The control: the gap to `opt_wasserstein` *is* what robustness bought. |
 
-## `gate` — the headline ablation (4 arms)
-
-**The question:** does gating on *tail value* beat gating on accuracy, on
-learned attention, and on nothing?
-
-Everything else is pinned: same specialists, same copula, same static policy,
-same DRO-CVaR solver. Only `Gate.gate(spec) → g` changes.
-
-| Arm | Importance signal | Why it is the right control |
-|---|---|---|
-| `gate_equal` | none — uniform `g` | The floor. Any gate that cannot beat "weight everything equally" does nothing. |
-| `gate_accuracy` | Spearman rank IC on the training window, softmaxed | Rewards being **right**, with no notion of tail value. This is the arm that isolates the paper's actual claim: that *accuracy is the wrong objective for a tail-risk portfolio*. |
-| `gate_attention` | Learned torch attention over source summaries, trained on return MSE | Learned, but supervised by the **mean**, not by risk. Separates "learned" from "learned on the right objective" — without it, a TailVoI win could just be "a fitted gate beats a fixed one". |
-| `gate_tailvoi` | Predicted counterfactual `Δᵢ`, softmaxed | The proposal. |
-
-The three controls are chosen to strip a TailVoI win down to its actual cause.
-`equal` removes gating; `accuracy` keeps learning but changes the objective;
-`attention` keeps learning *and* flexibility but still optimises the mean. If
-TailVoI beats all three, the remaining explanation is the tail objective itself.
-
-### How the Tail-VoI target is built
-
-For each sampled training date, the whole downstream is re-solved with each
-source removed:
-
-```
-Δᵢ = ρ(I₋ᵢ) − ρ(I)
-```
-
-A **positive** `Δᵢ` means the book you would have held *without* source `i` had a
-worse tail — it earned its place. Each source is ablated at the stage it
-actually enters: dropping `technical` or `news` removes a contributor to
-`fused_μ`; dropping `volatility` de-conditions the copula and changes the
-scenario set. Routing every ablation through `μ` would make the volatility
-target meaningless.
-
-That is `1 + K` convex solves per state, so it runs offline on training rows
-only, and a small regressor (`G_φ`) amortises it for the backtest.
-
----
-
-## `policy` — risk budgeting (4 arms)
+## `policy` — risk budgeting (2 arms)
 
 **The question:** does adapting the risk stance beat a fixed rule?
 
@@ -125,12 +83,9 @@ All four hold the gate at Tail-VoI and vary only
 |---|---|---|
 | `policy_static` | Config rule, optionally vol-targeted | The baseline. No learning. |
 | `policy_rl` | SAC, trained against `AllocationEnv` | Reward `R − λ_CVaR·CVaR − λ_DD·DD − c·turnover`. ⚠️ `λ_CVaR` is a **fixed shaping weight**, a different quantity from the `λ` the policy chooses. |
-| `policy_vol_target` | Static rule with `vol_target = 0.02` | The classical volatility-targeting schedule, as an *internal* rule rather than an external baseline. |
-| `cio_full` | CIO sets the gate, the stance **and** the weights | The monolithic control. The only arm without Tail-VoI *or* DRO-CVaR, so its CVaR budget is advisory — see [cio-agent.md](cio-agent.md). |
 
-`policy` and `gate` are orthogonal by construction: `gate` pins the policy at
-static and varies the gate; `policy` pins the gate at Tail-VoI and varies the
-policy.
+There is one gate and one allocator, so the policy is the only thing this
+family can vary — and the only thing the architecture offers as a choice.
 
 ---
 
@@ -225,6 +180,30 @@ output.
 
 ---
 
+## Running the matrix
+
+```bash
+./scripts/run-experiments.sh                        # every arm, static policy
+./scripts/run-experiments.sh --policies static rl   # every arm under BOTH
+./scripts/run-experiments.sh --families gate        # one family
+```
+
+`--policies` crosses the matrix with each risk controller, suffixing run ids
+(`gate_tailvoi__static`, `gate_tailvoi__rl`). It answers a question a single
+pass cannot: **does an arm's effect survive the change of risk controller, or
+was it an artefact of the static rule?**
+
+| `--policies` | declared arms | distinct runs | SAC trainings |
+|---|---|---|---|
+| `static` (default) | 31 | 17 | 1 |
+| `static rl` | 60 | 32 | 30 |
+
+The `policy` family is left uncrossed — it already varies exactly this, so
+duplicating it would only alias it with itself.
+
+**Budget it before launching.** Every RL arm trains a SAC agent per fold, so
+the full cross costs far more than twice a static sweep. Start with one family.
+
 ## What gets written
 
 ```
@@ -260,6 +239,9 @@ interval is a re-slice of saved artifacts; the model never runs twice.
 - **Run the gate family before believing anything else.** If `gate_tailvoi`
   does not beat `gate_accuracy` and `gate_attention`, the central claim has not
   survived, whatever the portfolio numbers look like.
+- **Check the gate actually moves.** `gate_equal` is the diagnostic: if Tail-VoI
+  scores like the uniform gate, it has stopped contributing and a good result is
+  coming from somewhere else.
 - **Check the gate actually moves.** The `gate_g_*` columns are persisted per
   rebalance. A gate pinned at a constant has stopped contributing, and a good
   result from it is coming from somewhere else.

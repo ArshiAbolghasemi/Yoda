@@ -187,6 +187,10 @@ class OptimizerConfig:
 @dataclass(frozen=True)
 class TailVoIConfig:
     sources: tuple[str, ...] = SOURCES
+    # Which gate the CIO contains. Tail-VoI is the proposal; the other three
+    # are the controls it has to beat, kept selectable so the claim stays
+    # falsifiable rather than assumed.
+    gate: str = "tailvoi"  # tailvoi | accuracy | attention | equal_weight
     temperature: float = 1.0  # softmax temperature over predicted deltas
     mode: str = "softmax"  # softmax | threshold
     threshold: float = 0.0
@@ -197,7 +201,11 @@ class TailVoIConfig:
     rho_window: int = 60  # forward days the realized CVaR is measured over
     seed: int = 13
 
+    GATES: tuple[str, ...] = ("tailvoi", "accuracy", "attention", "equal_weight")
+
     def __post_init__(self) -> None:
+        if self.gate not in self.GATES:
+            raise ValueError(f"Unknown gate: {self.gate}; expected one of {self.GATES}")
         if self.rho not in {"realized", "reference"}:
             raise ValueError(f"Unknown Tail-VoI risk functional: {self.rho}")
         if self.mode not in {"softmax", "threshold"}:

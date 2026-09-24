@@ -8,7 +8,9 @@ shared; only stage 5 differs.
 ./scripts/train-tail-voli-risk-rl.sh   # stages 1-5, SAC risk controller
 ```
 
-Both accept `--gate tailvoi|accuracy|attention|equal_weight` and `--run-id NAME`.
+Both accept `--gate tailvoi|accuracy|attention|equal_weight` (default:
+`TAILVOI__GATE`) and `--run-id NAME`. The risk policy is what the two scripts
+differ in.
 
 ## Before you start
 
@@ -50,7 +52,7 @@ future rows.
 run_tail_voli_risk(config)
 └── run_backtest(...)
     └── for each fold:
-        ├── build_stack(panel, config, fold.train, EqualWeightGate())   # stages 1-2
+        ├── build_stack(panel, config, fold.train, TailVoIGate())      # stages 1-2
         │   ├── build_news_features(...)      if NEWS__BACKEND != none
         │   ├── Specialist.fit(...)           per source
         │   └── StudentTCopula.fit(...)
@@ -122,13 +124,13 @@ Cost scales as `n_states × (1 + K)` solves. 250 states × 3 sources ≈ 1000 so
 
 ## Stage 4 — Train the gate
 
-`fit_gate(kind, config)(stack, fold.train)` dispatches on `--gate`:
+`fit_gate(config, kind)(stack, fold.train)` dispatches on the selected gate:
 
-| `--gate` | What is fitted | Needs stage 3? |
+| gate | What is fitted | Needs the counterfactual targets? |
 |---|---|---|
 | `tailvoi` | `StandardScaler → MLPRegressor` on `(summary, Δ)` | yes |
-| `accuracy` | Spearman IC per source over the whole training window | no |
-| `attention` | torch attention, 300 Adam epochs on `n_states` sampled dates | no |
+| `accuracy` | Spearman IC per source over the training window | no |
+| `attention` | torch attention, 300 Adam epochs | no |
 | `equal_weight` | nothing | no |
 
 ```

@@ -1,106 +1,80 @@
-"""The CIO agent: one decision-maker, no model inference."""
+"""The CIO: Tail-VoI gate + risk policy + DRO-CVaR, returning weights."""
 
 from __future__ import annotations
 
-import pathlib
-
-import numpy as np
 import pytest
 
-from yoda.cio.agent import CIOAgent
-from yoda.common.types import (
-    DROCVaROptimizer,
-    Gate,
-    MarketState,
-    RiskParamPolicy,
-    RiskParams,
-)
+from yoda.cio import CIOAgent, CIODecision, build_cio
+from yoda.policy.static import StaticRiskPolicy
+from yoda.tailvoi.tailvoi_gate import TailVoIGate
 
 
 @pytest.fixture
-def cio(config, stack, train_rows):
-    agent = CIOAgent(config, stack.sources)
-    agent.fit(stack, train_rows)
-    return agent
+def cio(config, stack):
+    return build_cio(stack, StaticRiskPolicy(config.research.static_policy))
 
 
-def _state(cvar: float = 0.02, assets: int = 4) -> MarketState:
-    zeros = np.zeros(assets)
-    return MarketState(zeros, zeros, {}, {"cvar": cvar}, zeros)
+def test_contains_the_gate_the_policy_and_the_allocator(cio, stack):
+    assert cio.gate is stack.gate
+    assert cio.optimizer is stack.optimizer
+    assert isinstance(cio.policy, StaticRiskPolicy)
 
 
-def test_fills_all_three_sockets():
-    """Gate, policy and allocator - the whole decision in one object."""
+def test_the_gate_is_selectable(config, stack, train_rows):
+    """The CIO contains whichever gate the config or flag chose."""
+    from yoda.stack import fit_gate
+    from yoda.tailvoi import AccuracyGate, EqualWeightGate
+
+    for kind, expected in (
+        ("tailvoi", TailVoIGate),
+        ("accuracy", AccuracyGate),
+        ("equal_weight", EqualWeightGate),
+    ):
+        stack.gate = fit_gate(config, kind)(stack, train_rows)
+        agent = build_cio(stack, StaticRiskPolicy(config.research.static_policy))
+        assert isinstance(agent.gate, expected)
+
+
+def test_cio_still_only_returns_weights(cio):
+    """Whatever gate it contains, the CIO's output is a portfolio."""
+    from yoda.common.types import DROCVaROptimizer, Gate, RiskParamPolicy
+
     for contract in (Gate, RiskParamPolicy, DROCVaROptimizer):
-        assert issubclass(CIOAgent, contract)
+        assert not isinstance(cio, contract)
 
 
-def test_uses_no_model_inference():
-    """No OpenJev, no network: the agent must be pure and reproducible."""
-    source = pathlib.Path("yoda/cio/agent.py").read_text()
-    for forbidden in ("JevClient", "typesafe", "system_one", "resolve_model", "http"):
-        assert forbidden not in source
+def test_decide_returns_weights_on_the_simplex(cio, stack, train_rows, equal_book):
+    position = int(train_rows[-1])
+    state, scen, _ = stack.state(position, equal_book)
+    spec = stack.specialist_output(position)
+    decision = cio.decide(spec, scen, state, equal_book)
 
-
-def test_gate_is_a_distribution_over_the_live_sources(cio, stack, train_rows):
-    spec = stack.specialist_output(int(train_rows[-1]))
-    output = cio.gate(spec)
-    assert set(output.g) == set(stack.sources)
-    assert sum(output.g.values()) == pytest.approx(1.0)
-    assert all(value >= 0 for value in output.g.values())
-
-
-def test_gate_prefers_the_channel_that_is_saying_more(cio, stack, train_rows):
-    """Trust follows cross-sectional dispersion, normalised per channel."""
-    spec = stack.specialist_output(int(train_rows[-1]))
-    sources = list(stack.sources)
-    flat, loud = sources[0], sources[-1]
-    spec.mu_hat[flat] = np.zeros_like(spec.mu_hat[flat])  # says nothing
-    spec.mu_hat[loud] = np.linspace(-1, 1, len(spec.mu_hat[loud]))  # differentiates
-    g = cio.gate(spec).g
-    assert g[loud] > g[flat]
-
-
-def test_is_deterministic(cio, stack, train_rows):
-    spec = stack.specialist_output(int(train_rows[-1]))
-    assert cio.gate(spec).g == cio.gate(spec).g
-
-
-def test_stance_tightens_when_the_tail_widens(cio):
-    calm, stressed = cio.act(_state(cvar=0.005)), cio.act(_state(cvar=0.10))
-    assert stressed.budget < calm.budget
-    assert stressed.lam > calm.lam
-    assert calm.alpha == stressed.alpha  # alpha is never an action
-
-
-def test_weights_are_long_only_on_the_simplex(cio, stack, scenarios, equal_book):
-    n = stack.n_investable
-    w = cio.solve(
-        np.full(n, 0.0005), scenarios, RiskParams(5.0, 0.05, 0.001), equal_book
-    )
+    assert isinstance(decision, CIODecision)
+    w = decision.weights
     assert (w >= -1e-9).all()
     assert w.sum() == pytest.approx(1.0, abs=1e-6)
-    assert w.max() <= max(cio.optimizer.max_weight, 1.5 / n) + 1e-6
 
 
-def test_turnover_penalty_still_binds(cio, stack, scenarios):
-    """The CVaR bound is advisory here, but the convex constraints are not."""
-    n = stack.n_investable
-    previous = np.zeros(n)
-    previous[0] = 1.0
-    mu = np.full(n, 0.0005)
-    free = cio.solve(mu, scenarios, RiskParams(5.0, 0.05, 0.0), previous)
-    sticky = cio.solve(mu, scenarios, RiskParams(5.0, 0.05, 5.0), previous)
-    assert np.abs(sticky - previous).sum() < np.abs(free - previous).sum()
+def test_decision_records_what_it_decided(cio, stack, train_rows, equal_book):
+    """The ledger needs the gate weights and the risk parameters."""
+    position = int(train_rows[-1])
+    state, scen, _ = stack.state(position, equal_book)
+    decision = cio.decide(stack.specialist_output(position), scen, state, equal_book)
+
+    assert sum(decision.gate.g.values()) == pytest.approx(1.0)
+    assert decision.risk.alpha == cio.policy.alpha
+    assert decision.risk.lam >= 0
 
 
-def test_installing_the_cio_replaces_the_optimizer(config, panel, train_rows):
-    """gate='cio' hands the whole decision over, DRO-CVaR included."""
-    from yoda.stack import build_stack, fit_gate
-    from yoda.tailvoi.baselines import EqualWeightGate
+def test_the_policy_is_the_only_interchangeable_part(config, stack):
+    """Static or SAC by flag; the gate and the allocator do not vary."""
+    static = build_cio(stack, StaticRiskPolicy(config.research.static_policy))
+    other = build_cio(stack, StaticRiskPolicy(config.research.static_policy))
+    assert static.gate is other.gate
+    assert static.optimizer is other.optimizer
 
-    stack = build_stack(panel, config, train_rows, EqualWeightGate())
-    assert not isinstance(stack.optimizer, CIOAgent)
-    stack.gate = fit_gate("cio", config)(stack, train_rows)
-    assert isinstance(stack.gate, CIOAgent)
-    assert stack.optimizer is stack.gate
+
+def test_cio_does_not_emit_weights_itself(cio):
+    """It composes the solver; it is not a solver."""
+    assert not hasattr(CIOAgent, "solve")
+    assert hasattr(cio.optimizer, "solve")

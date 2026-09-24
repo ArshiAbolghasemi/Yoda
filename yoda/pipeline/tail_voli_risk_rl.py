@@ -33,8 +33,8 @@ PIPELINE = "tail_voli_risk_rl"
 def run_tail_voli_risk_rl(
     config: Config,
     *,
+    gate: str | None = None,
     run_id: str = "tail_voli_risk_rl",
-    gate: str = "tailvoi",
     panel: AlignedPanel | None = None,
     features: dict[str, np.ndarray] | None = None,
     optimizer: DROCVaROptimizer | None = None,
@@ -56,16 +56,16 @@ def run_tail_voli_risk_rl(
             checkpoint=config.path(f"{research.rl.checkpoint}_{run_id}"),
         )
 
-    logger.info("tail_voli_risk_rl_start run=%s gate=%s", run_id, gate)
+    logger.info("tail_voli_risk_rl_start run=%s", run_id)
     run_backtest(
         panel,
         config,
         run_id,
         pipeline=PIPELINE,
-        fit_gate=fit_gate(gate, config),
+        fit_gate=fit_gate(config, gate),
         make_policy=make_policy,
         features=features,
         optimizer=optimizer,
-        label=label or f"rl/{gate}",
+        label=label or f"rl/{gate or config.research.tailvoi.gate}",
     )
     return evaluate(config, run_id, panel=panel, make_plots=make_plots)

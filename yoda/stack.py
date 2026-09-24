@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from yoda.cio.agent import CIOAgent
 from yoda.common.alignment import AlignedPanel
 from yoda.common.logger import logger
 from yoda.common.types import (
@@ -245,29 +244,25 @@ def build_stack(
 
 
 def fit_gate(
-    kind: str, config: Config
+    config: Config, kind: str | None = None
 ) -> Callable[[AllocationStack, np.ndarray], Gate]:
-    """A gate factory for the backtest engine: ``(stack, train_rows) -> Gate``.
+    """Build the gate the CIO will contain: ``(stack, train_rows) -> Gate``.
 
-    The Tail-VoI gate needs the counterfactual generator to have run first, which
-    needs a stack, which is why gates are trained here rather than up front: the
-    engine hands over a stack already fitted on the fold's training rows.
+    ``kind`` defaults to ``TAILVOI__GATE``. Tail-VoI is the proposal; the other
+    three are the controls it has to beat, and each closes a specific escape
+    route - "does gating do anything at all", "is this just accuracy weighting",
+    "is this just any fitted gate beating a fixed one".
+
+    Tail-VoI is fitted here rather than up front because it needs the
+    counterfactual generator to have run, which needs a stack: the engine hands
+    over one already fitted on the fold's training rows.
     """
     research = config.research
+    kind = kind or research.tailvoi.gate
 
     def build(stack: AllocationStack, rows: np.ndarray) -> Gate:
         if kind == "equal_weight":
             return EqualWeightGate()
-
-        if kind == "cio":
-            # One agent for the whole decision: it is the gate, the policy and
-            # the allocator, so it replaces the optimizer on the stack too.
-            # That means DRO-CVaR is not in the loop for this arm.
-            agent = CIOAgent(config, stack.sources)
-            agent.fit(stack, rows)
-            stack.optimizer = agent
-            logger.info("cio_installed gate+policy+optimizer replaced by the CIO")
-            return agent
 
         if kind == "accuracy":
             gate = AccuracyGate(temperature=research.tailvoi.temperature)
@@ -286,10 +281,7 @@ def fit_gate(
             gate.fit(
                 np.stack([summarise(spec, sources) for spec in outputs]),
                 np.stack(
-                    [
-                        np.stack([spec.mu_hat[name] for name in sources])
-                        for spec in outputs
-                    ]
+                    [np.stack([spec.mu_hat[n] for n in sources]) for spec in outputs]
                 ),
                 stack.panel.targets[positions][:, stack.universe],
                 sources,
@@ -304,6 +296,6 @@ def fit_gate(
             gate.fit(targets)
             return gate
 
-        raise ValueError(f"Unknown gate: {kind}")
+        raise ValueError(f"Unknown gate: {kind!r}")
 
     return build

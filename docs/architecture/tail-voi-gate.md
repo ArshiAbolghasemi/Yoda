@@ -162,22 +162,25 @@ decides which channel is which.
 
 ## 4. Baseline gates — the ablation the claim rests on
 
-| Gate | Importance signal | Why it is the right control |
+Tail-VoI is the proposal; these three are the controls it has to beat. Each
+closes one specific escape route, and without them a good result is consistent
+with several explanations you cannot tell apart.
+
+| Gate | Importance signal | Escape route it closes |
 |---|---|---|
-| `EqualWeightGate` | none | The floor. If Tail-VoI cannot beat this, it does nothing. |
-| `AccuracyGate` | Spearman IC on the training window, softmaxed | Rewards being *right*, with no notion of tail value. The volatility channel is scored against `\|r\|`, not `r`. |
-| `AttentionGate` | A learned torch attention over the source summaries — one shared scorer applied per source chunk, 300 Adam epochs at lr 1e-2 | Learned, but supervised by **mean** prediction error (MSE of fused `μ` vs realized), not by risk. Isolates "learned" from "learned on the right objective". |
+| `EqualWeightGate` | none — uniform `g` | *Does gating do anything at all, versus just averaging the sources?* Also the diagnostic for a gate that has quietly collapsed to near-uniform weights. |
+| `AccuracyGate` | Spearman rank IC on the training window, softmaxed | *Is this just accuracy weighting with extra steps?* The sharpest control, because "accuracy is the wrong objective for a tail-risk portfolio" is the actual thesis. The volatility channel is scored against `\|r\|`, not `r`. |
+| `AttentionGate` | Learned torch attention over the source summaries | *Is this just any fitted gate beating a fixed one?* Keeps learning and flexibility, but is supervised by **mean** prediction error rather than by risk. |
 
 All four implement the identical `Gate` interface, so swapping one in changes
-nothing else in the stack:
+nothing else — same specialists, same copula, same policy, same solver.
 
 ```bash
-./scripts/train-tail-voli-risk.sh --gate tailvoi      # or accuracy | attention | equal_weight
+./scripts/train-tail-voli-risk.sh --gate accuracy     # or tailvoi | attention | equal_weight
 ```
 
-The `gate` experiment family runs all four on the same panel, splits and intervals.
-That table is the headline result — see
-[inference.md](inference.md#the-experiment-harness).
+The default comes from `TAILVOI__GATE`. The `gate` experiment family runs all
+four on identical splits; that table is the headline result.
 
 ## Settings
 

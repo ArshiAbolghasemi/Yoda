@@ -25,7 +25,7 @@ from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer, Gate, RiskParamPolicy
 from yoda.config.settings import Config
 from yoda.stack import AllocationStack, build_stack
-from yoda.tailvoi.baselines import EqualWeightGate
+from yoda.tailvoi.tailvoi_gate import TailVoIGate
 
 GateFactory = Callable[[AllocationStack, np.ndarray], Gate]
 PolicyFactory = Callable[[AllocationStack, np.ndarray, np.ndarray], RiskParamPolicy]
@@ -89,7 +89,14 @@ def run_backtest(
 
     for fold in generate_folds(panel, config):
         stack = build_stack(
-            panel, config, fold.train, EqualWeightGate(), features, optimizer
+            panel,
+            config,
+            fold.train,
+            # Unfitted: it degrades to an even gate, which is what the
+            # counterfactual generator needs while it builds the targets.
+            TailVoIGate(research.tailvoi),
+            features,
+            optimizer,
         )
         if fit_gate is not None:
             stack.gate = fit_gate(stack, fold.train)

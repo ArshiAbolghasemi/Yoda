@@ -43,7 +43,7 @@ weights. Then read whichever component you are working on.
 | [tail-voi-gate.md](docs/architecture/tail-voi-gate.md) | **The centerpiece** — counterfactual Δ targets, the learned gate, and the three baseline gates it must beat |
 | [risk-policy.md](docs/architecture/risk-policy.md) | **The seam** — the static rule, the SAC controller, the environment and its reward |
 | [openjev-specialists.md](docs/architecture/openjev-specialists.md) | The optional OpenJev 27B backend — serving, decision tasks, caching, calibration metrics |
-| [cio-agent.md](docs/architecture/cio-agent.md) | The CIO agent — one decision-maker for gate, risk stance *and* weights, with no model inference |
+| [cio-agent.md](docs/architecture/cio-agent.md) | The CIO — Tail-VoI gate + risk policy + DRO-CVaR behind one call, returning portfolio weights |
 
 **Supporting components**
 
@@ -110,12 +110,11 @@ FP8). `cd llm-serve && ./serve.sh` does the same without containers. Details in
 ./scripts/train-tail-voli-risk.sh      # no-RL stack, static risk policy
 ./scripts/train-tail-voli-risk-rl.sh   # same stack, RL risk controller
 uv run main.py specialists             # score specialist prediction quality first
-uv run main.py experiments             # every baseline and ablation, one table
+./scripts/run-experiments.sh           # every ablation, one table
+./scripts/run-experiments.sh --policies static rl   # ...under both controllers
 uv run main.py data                    # rebuild the dataset from scratch
 ```
 
-Both training scripts take `--gate tailvoi|accuracy|attention|equal_weight|cio`
-and `--run-id NAME`. Choosing `--gate cio` hands the whole decision to the
 CIO agent — gate, risk stance and weights. Each run writes `data/processed/runs/<run_id>/` containing
 `weights.parquet`, `ledger.parquet`, `run_meta.json`, four PNGs and a `report.html`.
 

@@ -9,7 +9,6 @@ from yoda.common.types import MarketState, RiskParams
 from yoda.copula.student_t import StudentTCopula, tail_stats
 from yoda.optimizer.dro_cvar import DROCVaR
 from yoda.tailvoi.base import MU_SOURCES, conditioning_strength, fuse
-from yoda.tailvoi.baselines import EqualWeightGate
 
 # ---- specialists ---------------------------------------------------------
 
@@ -170,7 +169,7 @@ def test_solver_rejects_mismatched_shapes(stack, scenarios, config):
 
 def test_gate_weights_are_a_distribution(stack, train_rows):
     spec = stack.specialist_output(int(train_rows[-1]))
-    output = EqualWeightGate().gate(spec)
+    output = stack.gate.gate(spec)
     assert sum(output.g.values()) == pytest.approx(1.0)
     assert output.fused_mu.shape == (stack.n_investable,)
 

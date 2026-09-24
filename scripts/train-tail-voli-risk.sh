@@ -2,7 +2,6 @@
 # Tail-VoI gated DRO-CVaR allocation with a static risk policy.
 # Fits specialists + copula, generates counterfactual targets, trains the gate,
 # walk-forward backtests and scores. Extra flags pass through to main.py:
-#   ./scripts/train-tail-voli-risk.sh --gate accuracy --run-id gate_accuracy
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

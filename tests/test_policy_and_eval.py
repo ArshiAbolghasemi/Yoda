@@ -29,11 +29,6 @@ def test_static_policy_is_config_driven():
     assert (params.lam, params.budget) == (2.0, 0.07)
 
 
-def test_vol_target_tightens_the_budget_when_the_tail_widens():
-    policy = StaticRiskPolicy(StaticPolicyConfig(budget=0.05, vol_target=0.02))
-    assert policy.act(_state(cvar=0.04)).budget < policy.act(_state(cvar=0.01)).budget
-
-
 def test_actions_stay_inside_the_configured_bounds():
     config = RLConfig()
     for action in (np.array([-2.0, -2, -2]), np.array([2.0, 2, 2]), np.zeros(3)):

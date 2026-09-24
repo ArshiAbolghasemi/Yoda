@@ -1,4 +1,4 @@
-"""Tail Value-of-Information gating."""
+"""Tail Value-of-Information gating, and the baseline gates it must beat."""
 
 from yoda.common.types import Gate, GateOutput
 from yoda.tailvoi.base import (

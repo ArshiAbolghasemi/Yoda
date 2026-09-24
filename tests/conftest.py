@@ -59,9 +59,11 @@ def train_rows(panel, config):
 @pytest.fixture(scope="session")
 def stack(panel, config, train_rows):
     from yoda.stack import build_stack
-    from yoda.tailvoi.baselines import EqualWeightGate
+    from yoda.tailvoi.tailvoi_gate import TailVoIGate
 
-    return build_stack(panel, config, train_rows, EqualWeightGate())
+    # Unfitted: degrades to an even gate, which is what the counterfactual
+    # generator sees while it builds the targets.
+    return build_stack(panel, config, train_rows, TailVoIGate(config.research.tailvoi))
 
 
 @pytest.fixture
