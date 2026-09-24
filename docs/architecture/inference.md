@@ -149,7 +149,8 @@ The nine HedgeAgents-style metrics plus tail and cost columns, per interval:
 | `Turnover` | mean per step |
 
 `ENB` uses the marginal-risk-contribution decomposition, not Meucci's
-minimum-torsion basis — same ranking, far cheaper, marked `ponytail:` in the code.
+minimum-torsion basis — same ranking, far cheaper, and flagged as a known
+simplification in the module docstring.
 It needs an asset covariance, so `evaluate` builds the panel unless you pass
 `panel=`; without one, `ENB` is `NaN` and everything else still scores.
 

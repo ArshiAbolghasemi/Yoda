@@ -4,10 +4,10 @@ The nine HedgeAgents-style metrics - TR, ARR, Sharpe, Calmar, Sortino, MaxDD,
 Volatility, Entropy and Effective Number of Bets - plus realized CVaR/ES at the
 run's alpha and average turnover.
 
-``ponytail:`` ENB uses the marginal-risk-contribution decomposition rather than
-Meucci's minimum-torsion basis. It is the standard cheap form and agrees with
-the torsion version on ranking; swap in minimum-torsion if a referee asks for
-the exact construction.
+Known simplification: ENB uses the marginal-risk-contribution decomposition
+rather than Meucci's minimum-torsion basis. It is the standard cheap form and
+agrees with the torsion version on ranking; swap in minimum-torsion if the
+exact construction is required.
 """
 
 from __future__ import annotations
