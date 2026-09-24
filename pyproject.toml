@@ -30,20 +30,27 @@ dependencies = [
 
 [project.optional-dependencies]
 # Torch build selection. Pick exactly one; they are mutually exclusive.
-#   uv sync --extra cu130      (Linux/Windows CUDA 13.x - the only serving build)
+#   uv sync --extra cu132      (Linux/Windows CUDA 13.2)
+#   uv sync --extra cu130      (Linux/Windows CUDA 13.0)
+#   uv sync --extra cu129      (Linux/Windows CUDA 12.9, research only)
 #   uv sync --extra cpu        (CPU-only wheels)
-# With no extra, torch resolves from PyPI (the default wheel for the platform:
-# CUDA 13 on Linux, MPS/CPU on macOS).
+# Serving needs one of the two CUDA 13 channels - they are the only ones that
+# carry vLLM. cu126/cu128/cu129 are research-only builds. With no extra, torch
+# resolves from PyPI (CUDA 13 on Linux, MPS/CPU on macOS).
 cpu = ["torch>=2.8.0"]
 cu126 = ["torch>=2.8.0"]
 cu128 = ["torch>=2.8.0"]
 cu129 = ["torch>=2.8.0"]
-# vLLM lives here rather than in the main dependencies because its PyPI wheel
-# links libcudart.so.13: it runs only against a CUDA 13 torch. The cu126/cu128/
+# vLLM rides with the CUDA 13 channels and nowhere else: its PyPI wheel links
+# libcudart.so.13, so it runs only against a CUDA 13 torch. The cu126/cu128/
 # cu129 channels ship libcudart.so.12, so installing vLLM beside them resolves
-# cleanly and then dies on import. Tying it to cu130 makes that unrepresentable.
+# cleanly and then dies on import. Scoping it here makes that unrepresentable.
 # No macOS wheels either - nvidia-cudnn-frontend is linux/windows only.
 cu130 = [
+    "torch>=2.8.0",
+    "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
+]
+cu132 = [
     "torch>=2.8.0",
     "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
@@ -62,6 +69,7 @@ conflicts = [
         { extra = "cu128" },
         { extra = "cu129" },
         { extra = "cu130" },
+        { extra = "cu132" },
     ],
 ]
 
@@ -90,6 +98,11 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
 [tool.uv.sources]
 # CUDA wheels exist for Linux/Windows only; macOS always falls back to PyPI.
 torch = [
@@ -98,6 +111,7 @@ torch = [
     { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu132", extra = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [tool.pytest.ini_options]

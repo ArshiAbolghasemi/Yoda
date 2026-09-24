@@ -83,11 +83,11 @@ cd llm-serve
 Reads the project's **root `.env`** — the same file the compose stack uses, so
 the whole project is configured in one place. There is no `llm-serve/.env`.
 
-vLLM ships with the **`cu130` extra**, so one `uv sync` gives you both the
-research stack and the server:
+vLLM ships with the **CUDA 13 extras** — `cu132` and `cu130` — so one `uv sync`
+gives you both the research stack and the server:
 
 ```bash
-uv sync --extra cu130     # serving and research, one environment
+uv sync --extra cu132     # serving and research, one environment (or cu130)
 ```
 
 It lives there rather than in the main dependencies because every vLLM wheel on
@@ -96,7 +96,7 @@ default PyPI build to CUDA 13 at torch 2.11.0, and vLLM followed. The
 `cu126`/`cu128`/`cu129` channels ship `libcudart.so.12`, so a vLLM installed
 beside them resolves cleanly and then dies at import with
 `ImportError: libcudart.so.13: cannot open shared object file`. Scoping it to
-`cu130` makes that pairing impossible to produce.
+`cu130`/`cu132` makes that pairing impossible to produce.
 
 ### The GPU host needs driver r580+
 
@@ -104,7 +104,7 @@ CUDA 13 is a two-sided requirement, and only the first half comes from `uv sync`
 
 | Half | Provided by | Symptom when missing |
 |---|---|---|
-| `libcudart.so.13` (userspace) | the cu130 torch wheel | `ImportError: libcudart.so.13` |
+| `libcudart.so.13` (userspace) | the cu130/cu132 torch wheel | `ImportError: libcudart.so.13` |
 | driver r580+ (kernel) | the **host**, not the venv | `CUDA driver version is insufficient` |
 
 An older datacenter GPU host — an A100 on r570, say — can still run CUDA 13

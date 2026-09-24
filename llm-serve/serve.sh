@@ -45,7 +45,7 @@ mkdir -p "$LOGS" "$PIDS"
 
 # vLLM's wheel is built against CUDA 13, so it needs two separate things:
 #
-#   libcudart.so.13   userspace, shipped inside the cu130 torch wheel
+#   libcudart.so.13   userspace, shipped inside the cu130/cu132 torch wheel
 #   driver r580+      kernel side, the host's NVIDIA driver
 #
 # A datacenter GPU on an older driver can still run CUDA 13 through NVIDIA's
@@ -101,12 +101,12 @@ print("vllm:   ok")
   printf '%s\n' "$out" >&2
   case "$out" in
     *"No module named 'vllm'"*)
-      die "vLLM is not in this environment. It ships with the cu130 extra only:
-    (cd $ROOT && uv sync --extra cu130)" ;;
+      die "vLLM is not in this environment. It ships with the CUDA 13 extras:
+    (cd $ROOT && uv sync --extra cu132)   # or cu130" ;;
     *libcudart.so.13*)
       die "this environment has a CUDA 12 torch; vLLM needs the CUDA 13 one.
-  libcudart.so.13 ships inside the cu130 torch wheel, so:
-    (cd $ROOT && uv sync --extra cu130)
+  libcudart.so.13 ships inside the cu130/cu132 torch wheels, so:
+    (cd $ROOT && uv sync --extra cu132)   # or cu130
   cu126/cu128/cu129 carry libcudart.so.12 and deliberately do not pull vLLM." ;;
     *"CUDA driver version is insufficient"*|*libcuda.so*)
       die "the CUDA 13 build loaded but the driver will not accept it - see
