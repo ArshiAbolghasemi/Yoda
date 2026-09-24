@@ -21,7 +21,6 @@ cd "$(dirname "$0")"
 
 MODEL_REPO="${MODEL_REPO:-openjev/openjev}"
 MODEL_DIR="${MODEL_DIR:-./openjev}"
-VENV="${VENV:-./.venv}"
 HOST="${SERVE_HOST:-127.0.0.1}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 SHIM_PORT="${SHIM_PORT:-3000}"
@@ -37,22 +36,16 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- environment
 
-ensure_venv() {
-  if [ ! -x "$VENV/bin/python" ]; then
-    say "creating $VENV (vLLM is kept out of the research environment)"
-    command -v uv >/dev/null 2>&1 \
-      && uv venv --python 3.12 "$VENV" \
-      || python3 -m venv "$VENV"
-  fi
-  if ! "$VENV/bin/python" -c "import vllm" >/dev/null 2>&1; then
-    say "installing pinned serving dependencies"
-    # Versions published on the model card.
-    "$VENV/bin/pip" install --upgrade pip >/dev/null
-    "$VENV/bin/pip" install \
-      "vllm==0.29.0" "openai==3.16.2" "httpx==0.28.1" \
-      "transformers>=5.0.0" "huggingface_hub[cli]"
+ensure_deps() {
+  if ! uv run --no-sync --active python -c "import vllm" >/dev/null 2>&1; then
+    say "installing the serving extra into the project environment"
+    # vLLM pins torch exactly and caps numpy, so `serve` conflicts with the
+    # CUDA extras: syncing it replaces a cu* build rather than joining it.
+    uv sync --extra serve
   fi
 }
+
+run() { uv run --no-sync --active "$@"; }
 
 download() {
   if [ -f "$MODEL_DIR/config.json" ] && [ -f "$MODEL_DIR/helper/shim.py" ]; then
@@ -60,7 +53,7 @@ download() {
     return
   fi
   say "downloading $MODEL_REPO -> $MODEL_DIR (~55 GB on first run)"
-  "$VENV/bin/hf" download "$MODEL_REPO" --local-dir "$MODEL_DIR"
+  run hf download "$MODEL_REPO" --local-dir "$MODEL_DIR"
   [ -f "$MODEL_DIR/helper/shim.py" ] || die "shim.py missing from $MODEL_DIR"
 }
 
@@ -82,7 +75,7 @@ wait_for() { # name url timeout
 start_vllm() {
   alive vllm && { say "vLLM already running (pid $(cat $PIDS/vllm.pid))"; return; }
   say "starting vLLM on :$VLLM_PORT"
-  nohup "$VENV/bin/vllm" serve "$MODEL_DIR" \
+  nohup uv run --no-sync --active vllm serve "$MODEL_DIR" \
     --host "$HOST" --port "$VLLM_PORT" --served-model-name "$SERVED_NAME" \
     --enable-prefix-caching \
     --max-model-len 16384 \
@@ -112,7 +105,7 @@ start_shim() {
   READOUT_INSTR_STYLE="${READOUT_INSTR_STYLE:-pyrepr}" \
   SHIM_STAGGER="${SHIM_STAGGER:-1}" \
   SHIM_TOKEN="${SHIM_TOKEN:-}" \
-  nohup "$VENV/bin/python" "$MODEL_DIR/helper/shim.py" \
+  nohup uv run --no-sync --active python "$MODEL_DIR/helper/shim.py" \
     --host "$HOST" --port "$SHIM_PORT" \
     >"$LOGS/shim.log" 2>&1 &
   echo $! >"$PIDS/shim.pid"
@@ -133,10 +126,10 @@ stop_one() {
 
 case "${1:-start}" in
   download)
-    ensure_venv; download ;;
+    ensure_deps; download ;;
 
   start)
-    ensure_venv; download; start_vllm; start_shim
+    ensure_deps; download; start_vllm; start_shim
     cat <<MSG
 
 OpenJev is serving.

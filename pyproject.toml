@@ -11,7 +11,7 @@ dependencies = [
     "gymnasium>=1.3.0",
     "jev>=0.3.0",
     "matplotlib>=3.11.2",
-    "numpy>=2.5.3",
+    "numpy>=2.1",
     "openai>=3.16.2",
     "pandas>=3.0.6",
     "pyarrow>=25.0.1",
@@ -33,6 +33,11 @@ dependencies = [
 #   uv sync --extra cpu        (CPU-only wheels)
 # With no extra, torch resolves from PyPI (the default wheel for the platform:
 # CUDA on Linux, MPS/CPU on macOS).
+# Local OpenJev serving. vLLM pins torch exactly and caps numpy, so it cannot
+# share a resolution with the CUDA extras above - pick one:
+#   uv sync --extra serve     on the box that serves the model
+#   uv sync --extra cu130     on the box that runs the research
+serve = ["vllm==0.29.0", "openai==3.16.2", "httpx==0.28.1"]
 cpu = ["torch>=2.8.0"]
 cu126 = ["torch>=2.8.0"]
 cu128 = ["torch>=2.8.0"]
@@ -51,6 +56,7 @@ conflicts = [
         { extra = "cu126" },
         { extra = "cu128" },
         { extra = "cu130" },
+        { extra = "serve" },
     ],
 ]
 

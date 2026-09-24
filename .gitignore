@@ -221,6 +221,5 @@ __marimo__/
 
 # OpenJev local serving (llm-serve/)
 llm-serve/openjev/
-llm-serve/.venv/
 llm-serve/logs/
 llm-serve/run/
