@@ -43,14 +43,39 @@ mkdir -p "$LOGS" "$PIDS"
 
 # ---------------------------------------------------------------- environment
 
-# Check only - this script installs nothing.
+# Check only - this script installs nothing. It reports what actually went
+# wrong rather than guessing: "vllm is missing" and "vllm is installed but
+# fails to import" are different problems with different fixes, and hiding
+# the interpreter's own error makes the second one look like the first.
 ensure_deps() {
-  run python -c "import vllm" >/dev/null 2>&1 || die \
-    "vLLM is not in the project environment. Install it yourself with
-    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu126 / cpu
-  vLLM publishes no macOS wheels, so serving needs a Linux box."
-  command -v hf >/dev/null 2>&1 || run hf --help >/dev/null 2>&1 || die \
-    "the 'hf' CLI is missing - (cd $ROOT && uv sync) should provide it"
+  local out status
+  out=$(run python -c '
+import importlib, sys
+print("python:", sys.executable)
+try:
+    import torch
+    print("torch: ", torch.__version__, "cuda", torch.version.cuda)
+except Exception as exc:                      # torch is what vllm pins
+    print("torch:  FAILED -", exc)
+importlib.import_module("vllm")
+print("vllm:   ok")
+' 2>&1) && return 0
+  status=$?
+
+  printf '%s\n' "$out" >&2
+  case "$out" in
+    *"No module named 'vllm'"*)
+      die "vLLM is not in this environment. Install it with
+    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu128 / cu126 / cpu
+  vLLM publishes no macOS wheels, so serving needs a Linux box." ;;
+    *)
+      die "vLLM is installed but will not import (exit $status) - see the error
+  above, which names the interpreter and the torch it found. vllm pins torch
+  exactly (0.29 -> 2.13.0, 0.26 -> 2.11.0), so a mismatched pair, or CUDA
+  wheels that do not match this box's driver, fails right here. Re-sync one
+  extra cleanly:
+    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu128 / cu126" ;;
+  esac
 }
 
 run() { uv run --no-sync --active "$@"; }
