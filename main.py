@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 
 from yoda.common.alignment import build_panel
+from yoda.common.logger import logger, results
 from yoda.config import load_config
 from yoda.data.pipeline import DataPipeline
 from yoda.evaluation.prediction import evaluate_specialists
@@ -73,10 +74,14 @@ def main() -> None:
             try:
                 tables[channel] = load_jev_table(config, channel)
             except FileNotFoundError:
-                print(f"no cached OpenJev answers for {channel!r}; skipping")
+                logger.warning(
+                    "specialist_cache_missing channel=%s - skipping", channel
+                )
         if not tables:
             raise SystemExit("nothing to score - build the OpenJev features first")
-        print(evaluate_specialists(tables, panel, rows).round(4).to_string())
+        results.info(
+            "%s", evaluate_specialists(tables, panel, rows).round(4).to_string()
+        )
         return
 
     if arguments.command == "experiments":
@@ -96,10 +101,10 @@ def main() -> None:
         )
 
     for name, table in evaluation.tables.items():
-        print(f"\n== {name} ==")
-        print(table.round(4).to_string())
+        results.info("\n== %s ==", name)
+        results.info("%s", table.round(4).to_string())
     if evaluation.report:
-        print(f"\nreport: {evaluation.report}")
+        results.info("\nreport: %s", evaluation.report)
 
 
 if __name__ == "__main__":

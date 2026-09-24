@@ -150,3 +150,42 @@ def test_interval_masks_are_inclusive():
         "x", pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-04"), "regime"
     )
     assert interval.mask(dates).sum() == 3
+
+
+# ---- logging -------------------------------------------------------------
+
+
+def test_no_print_anywhere_in_the_package():
+    """A table written with print cannot be silenced, levelled or redirected."""
+    import pathlib
+    import re
+
+    offenders = [
+        f"{path}:{number}"
+        for path in [*pathlib.Path("yoda").rglob("*.py"), pathlib.Path("main.py")]
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if re.search(r"(?<!\w)print\(", line)
+    ]
+    assert offenders == []
+
+
+def test_results_go_to_stdout_and_diagnostics_to_stderr():
+    """`main.py experiments > out.txt` must capture results, not log noise.
+
+    Asserted on the handler wiring rather than captured output, because pytest
+    installs its own logging capture and would intercept both streams.
+    """
+    import logging
+    import sys
+
+    from yoda.common.logger import results
+
+    streams = [
+        h.stream for h in results.handlers if isinstance(h, logging.StreamHandler)
+    ]
+    assert sys.stdout in streams, "results must reach stdout"
+    # Never duplicated into the diagnostic stream, and never prefixed: this is
+    # read by people and by `>`, not parsed as logs.
+    assert results.propagate is False
+    assert any(h.formatter._fmt == "%(message)s" for h in results.handlers)
+    assert logging.getLogger("yoda").handlers == []  # inherits the stderr root
