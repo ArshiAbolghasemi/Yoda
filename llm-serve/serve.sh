@@ -65,16 +65,24 @@ print("vllm:   ok")
   printf '%s\n' "$out" >&2
   case "$out" in
     *"No module named 'vllm'"*)
-      die "vLLM is not in this environment. Install it with
-    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu128 / cu126 / cpu
-  vLLM publishes no macOS wheels, so serving needs a Linux box." ;;
+      die "vLLM is not in this environment. It ships with the cu130 extra only:
+    (cd $ROOT && uv sync --extra cu130)
+  Its wheel links libcudart.so.13, so a CUDA 13 torch is the only one it runs
+  against - cu126/cu128/cu129 deliberately do not carry it. Linux/Windows
+  only; there are no macOS wheels." ;;
     *)
+      case "$out" in
+        *libcudart.so.12*|*libcudart.so.13*|*libcuda*)
+          die "vLLM found the wrong CUDA runtime - see the error above.
+  Its wheel links libcudart.so.13, which only the CUDA 13 torch provides.
+  This environment has a CUDA 12 torch (cu126/cu128/cu129). Re-sync:
+    (cd $ROOT && uv sync --extra cu130)
+  If this box's driver is older than CUDA 13 (nvidia-smi), it cannot run the
+  PyPI vLLM build at all; serve from a CUDA 13 host." ;;
+      esac
       die "vLLM is installed but will not import (exit $status) - see the error
-  above, which names the interpreter and the torch it found. vllm pins torch
-  exactly (0.29 -> 2.13.0, 0.26 -> 2.11.0), so a mismatched pair, or CUDA
-  wheels that do not match this box's driver, fails right here. Re-sync one
-  extra cleanly:
-    (cd $ROOT && uv sync --extra cu130)   # or cu129 / cu128 / cu126" ;;
+  above, which names the interpreter and the torch it found. Re-sync cleanly:
+    (cd $ROOT && uv sync --extra cu130)" ;;
   esac
 }
 

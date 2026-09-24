@@ -83,16 +83,23 @@ cd llm-serve
 Reads the project's **root `.env`** — the same file the compose stack uses, so
 the whole project is configured in one place. There is no `llm-serve/.env`.
 
-vLLM is a **main dependency** of the project, so one `uv sync` gives you both
-the research stack and the server:
+vLLM ships with the **`cu130` extra**, so one `uv sync` gives you both the
+research stack and the server:
 
 ```bash
 uv sync --extra cu130     # serving and research, one environment
 ```
 
-It carries a `sys_platform` marker because vLLM publishes no macOS wheels
-(`nvidia-cudnn-frontend` is Linux/Windows only) — on a Mac the sync succeeds and
-simply skips it, so research still works and serving needs a Linux box.
+It lives there rather than in the main dependencies because its PyPI wheel links
+`libcudart.so.13` — a CUDA 13 torch is the only one it runs against. The
+`cu126`/`cu128`/`cu129` channels ship `libcudart.so.12`, so a vLLM installed
+beside them resolves cleanly and then dies at import with
+`ImportError: libcudart.so.13: cannot open shared object file`. Scoping it to
+`cu130` makes that pairing impossible to produce.
+
+A `sys_platform` marker covers the other gap: vLLM publishes no macOS wheels
+(`nvidia-cudnn-frontend` is Linux/Windows only), so on a Mac the sync succeeds
+and skips it — research works, serving needs a Linux box with a CUDA 13 driver.
 
 `llm-serve/serve.sh` **installs nothing**. It checks that vLLM is importable and
 tells you which `uv sync` to run if it is not, so the environment is only ever
@@ -110,7 +117,7 @@ Both paths use the serving configuration published on the model card:
 | max concurrent sequences | 256 |
 | max logprobs | 64 |
 | prefill backend | `--gdn-prefill-backend triton` |
-| pinned versions | `vllm>=0.26` (0.29.0 everywhere except `cu128`), `openai==3.16.2`, `httpx==0.28.1` |
+| pinned versions | `vllm==0.29.0` (in the `cu130` extra), `openai==3.16.2`, `httpx==0.28.1` |
 
 ### Readout calibration
 

@@ -22,27 +22,31 @@ dependencies = [
     "scipy>=1.18.1",
     "stable-baselines3>=2.9.0",
     "tenacity>=9.1.2",
-    "torch>=2.8.0",  # vllm pins it exactly; the cuda extra decides which
+    "torch>=2.8.0",
     "tqdm>=4.67.1",
-    # No macOS wheels: nvidia-cudnn-frontend is linux/windows only.
-    # Unpinned on purpose: vllm 0.29 needs torch 2.13.0, which the cu128
-    # channel does not publish, so that one extra resolves back to 0.26.
-    "vllm>=0.26; sys_platform == 'linux' or sys_platform == 'win32'",
     "typesafe-sdk>=0.7.1",
     "yfinance>=1.7.0",
 ]
 
 [project.optional-dependencies]
 # Torch build selection. Pick exactly one; they are mutually exclusive.
-#   uv sync --extra cu130      (Linux/Windows CUDA 13.0)
+#   uv sync --extra cu130      (Linux/Windows CUDA 13.x - the only serving build)
 #   uv sync --extra cpu        (CPU-only wheels)
 # With no extra, torch resolves from PyPI (the default wheel for the platform:
-# CUDA on Linux, MPS/CPU on macOS).
+# CUDA 13 on Linux, MPS/CPU on macOS).
 cpu = ["torch>=2.8.0"]
 cu126 = ["torch>=2.8.0"]
 cu128 = ["torch>=2.8.0"]
 cu129 = ["torch>=2.8.0"]
-cu130 = ["torch>=2.8.0"]
+# vLLM lives here rather than in the main dependencies because its PyPI wheel
+# links libcudart.so.13: it runs only against a CUDA 13 torch. The cu126/cu128/
+# cu129 channels ship libcudart.so.12, so installing vLLM beside them resolves
+# cleanly and then dies on import. Tying it to cu130 makes that unrepresentable.
+# No macOS wheels either - nvidia-cudnn-frontend is linux/windows only.
+cu130 = [
+    "torch>=2.8.0",
+    "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 
 [dependency-groups]
 dev = [

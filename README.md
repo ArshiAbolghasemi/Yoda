@@ -88,18 +88,19 @@ uv sync --extra cu130     # or cu129, cu128, cu126, cpu
 ```
 
 The CUDA extras are mutually exclusive. The channels cap at different torch
-versions, so the lockfile pins each to the newest build it actually publishes —
-and because vLLM pins `torch` exactly, the vLLM version follows from the channel:
+versions, so the lockfile pins each to the newest build it publishes:
 
-| Extra | torch | vLLM |
-|---|---|---|
-| `cpu` · `cu126` · `cu129` · `cu130` | 2.13.0 | 0.29.0 |
-| `cu128` | 2.11.0 | 0.26.0 |
+| Extra | torch | vLLM | Use for |
+|---|---|---|---|
+| `cu130` | 2.13.0+cu130 | 0.29.0 | serving OpenJev **and** research |
+| `cu129` · `cu126` | 2.13.0 | — | research on a CUDA 12 driver |
+| `cu128` | 2.11.0 | — | research on a CUDA 12 driver, older torch |
+| `cpu` | 2.13.0+cpu | — | no GPU |
 
-`cu128` publishes no torch 2.13.0, and vLLM 0.29.0 requires exactly that, so the
-cu128 environment resolves to the last vLLM built against 2.11. Prefer `cu129` on
-CUDA 12.8 hardware if you want current vLLM — CUDA minor versions are
-forward-compatible within 12.x.
+**Only `cu130` carries vLLM.** Its PyPI wheel links `libcudart.so.13`, so it runs
+only against a CUDA 13 torch; the cu12x channels ship `libcudart.so.12` and would
+install a vLLM that resolves fine and then fails on import. Tying vLLM to `cu130`
+makes that combination unrepresentable rather than a runtime surprise.
 
 ### OpenJev (optional probabilistic specialists)
 
