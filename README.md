@@ -159,27 +159,6 @@ Three properties shape the whole system and are explained in
 [docs/architecture/overview.md](docs/architecture/overview.md): mixed trading calendars, FX volume
 indicators that are NaN by design, and uneven news coverage.
 
-## Project status
-
-Defaults are conservative, not tuned. Two worth touching first:
-
-- `STATIC_POLICY__LAM=1.0` against a daily `μ` of a few basis points means the risk
-  term dominates and the book concentrates in FX. Lower `λ`, or scale `μ` to the
-  rebalance horizon, if you want the directional view to matter.
-- `RL__TOTAL_TIMESTEPS=5000` is a tractable default — every environment step is a
-  convex solve (~30 ms). Raise it deliberately and expect minutes, not seconds.
-
-Known limits:
-
-- Copula marginals are empirical; GARCH-t marginals are stubbed behind the same
-  interface (`COPULA__MARGINALS`) and raise until implemented.
-- ENB uses the marginal-risk-contribution decomposition, not Meucci's
-  minimum-torsion basis. Same ranking, far cheaper. Marked `ponytail:` in the code.
-- Synthetic RL episodes reuse the real state sequence and simulate only the
-  outcomes — states cannot be synthesised from the feature panel.
-- Direct-weight RL is out of scope by design. It drops in at the policy level and
-  touches nothing below it.
-
 ## Licence
 
 See [LICENSE](LICENSE).
