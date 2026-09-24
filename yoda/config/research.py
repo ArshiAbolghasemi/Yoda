@@ -106,6 +106,15 @@ class JevConfig:
     model: str = ""  # pin a version; empty records whatever the shim reports
     prompt_version: str = "v1"  # part of the cache key
     max_concurrency: int = 8
+    # Trading days of prior headlines sent alongside the current day's. The
+    # numeric channels carry their history inside the indicators (a 252-day
+    # percentile, a 60-day drawdown); news had none, so the same story read as
+    # new every day. 0 restores the single-day state.
+    news_lookback: int = 30
+    # Ceiling on how many past headlines travel with one state. Thirty days of
+    # a heavily covered name would otherwise crowd out the model's 16k context;
+    # the most recent are kept, oldest dropped first.
+    news_history_max: int = 40
     timeout: float = 120.0
     temperature: float = 0.0  # deterministic: the same state must give the same view
     max_tokens: int = 1200  # enough for the structured view, not for an essay

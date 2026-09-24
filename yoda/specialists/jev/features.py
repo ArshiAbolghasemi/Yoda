@@ -71,7 +71,21 @@ def _numeric_states(panel: AlignedPanel, channel: str, horizon: int) -> pd.DataF
     return pd.DataFrame(rows, columns=["asset", "date", "state", "skip", "news_count"])
 
 
-def _news_states(panel: AlignedPanel, horizon: int) -> pd.DataFrame:
+def _news_states(
+    panel: AlignedPanel, horizon: int, lookback: int = 0, history_max: int = 40
+) -> pd.DataFrame:
+    """One state per asset-day: today's headlines plus the recent record.
+
+    The numeric channels carry their history inside the indicators - a 252-day
+    volatility percentile, a 60-day drawdown - so the model can tell where the
+    present sits in the recent past. News had no such summary: every headline
+    arrived context-free, and the third downgrade in a week read exactly like
+    the first. ``lookback`` trading days of prior headlines fix that.
+
+    What does *not* change is when the model is asked. A day with no headlines
+    is still skipped even when the window behind it is full, so adding history
+    enriches the calls already being made rather than multiplying them.
+    """
     index = pd.MultiIndex.from_product(
         [panel.dates, list(panel.assets)], names=["date", "asset"]
     )
@@ -85,6 +99,42 @@ def _news_states(panel: AlignedPanel, horizon: int) -> pd.DataFrame:
         )
     )
     separator = config_separator()
+
+    def split(text: object) -> list[str]:
+        return [part.strip() for part in str(text).split(separator) if part.strip()]
+
+    # Per-asset chronology, so the window for day t is a slice and not a scan.
+    order = {asset: n for n, asset in enumerate(panel.assets)}
+    days = [date.strftime("%Y-%m-%d") for date in panel.dates]
+    per_asset: dict[str, list[list[str]]] = {
+        asset: [[] for _ in days] for asset in panel.assets
+    }
+    position = {day: t for t, day in enumerate(days)}
+    for asset, date, headlines in zip(
+        frame["asset"], frame["date"], frame["headlines"], strict=True
+    ):
+        per_asset[asset][position[date.strftime("%Y-%m-%d")]] = split(headlines)
+
+    def history(asset: str, t: int) -> list[dict]:
+        """Prior days that actually carried news, most recent first."""
+        if lookback <= 0:
+            return []
+        recent: list[dict] = []
+        budget = history_max
+        for offset in range(1, min(lookback, t) + 1):
+            items = per_asset[asset][t - offset]
+            if not items or budget <= 0:
+                continue
+            recent.append(
+                {
+                    "date": days[t - offset],
+                    "trading_days_ago": offset,
+                    "headlines": items[:budget],
+                }
+            )
+            budget -= len(items[:budget])
+        return recent
+
     rows = []
     for asset, date, headlines, count in zip(
         frame["asset"],
@@ -94,20 +144,24 @@ def _news_states(panel: AlignedPanel, horizon: int) -> pd.DataFrame:
         strict=True,
     ):
         day = date.strftime("%Y-%m-%d")
-        items = [
-            part.strip() for part in str(headlines).split(separator) if part.strip()
-        ]
+        items = split(headlines)
+        t = position[day]
+        past = history(asset, t)
         rows.append(
             (
                 asset,
                 day,
                 {
                     "asset": asset,
-                    "asset_type": panel.asset_types[panel.assets.index(asset)],
+                    "asset_type": panel.asset_types[order[asset]],
                     "date": day,
                     "prediction_horizon_trading_days": horizon,
                     "headlines": items,
                     "news_count": int(count),
+                    # Oldest-first would bury the live story; the model reads
+                    # the current day, then walks backwards.
+                    "recent_headlines": past,
+                    "recent_headlines_days": lookback,
                 },
                 not items,
                 float(count),
@@ -135,7 +189,7 @@ def build_jev_features(
     horizon = panel.horizon
 
     states = (
-        _news_states(panel, horizon)
+        _news_states(panel, horizon, settings.news_lookback, settings.news_history_max)
         if channel == "news"
         else _numeric_states(panel, channel, horizon)
     )
