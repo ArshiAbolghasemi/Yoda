@@ -1,7 +1,7 @@
 """SAC training for the risk-parameter controller (RL pipeline only).
 
 Off-policy SAC over a continuous 3-dim action, trained against
-:class:`~yoda.env.allocation_env.AllocationEnv`. Stable-Baselines3 supplies the
+:class:`~yoda.rl.allocation_env.AllocationEnv`. Stable-Baselines3 supplies the
 algorithm - there is nothing research-novel in the SAC implementation itself and
 no reason to hand-roll one.
 
@@ -18,8 +18,8 @@ from stable_baselines3 import SAC
 
 from yoda.common.logger import logger
 from yoda.config.research import RLConfig
-from yoda.env.allocation_env import AllocationEnv
 from yoda.policy.rl import RLRiskPolicy
+from yoda.rl.allocation_env import AllocationEnv
 
 
 def train_sac(

@@ -11,8 +11,10 @@ The endpoint lives in configuration (``JEV__BASE_URL``, ``JEV__API_KEY``,
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 
+from openai import OpenAI
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -33,6 +35,7 @@ from typesafe_sdk import (
 
 from yoda.common.logger import logger
 from yoda.config.research import JevConfig
+from yoda.specialists.prompts.schema import AgentView
 
 TRANSIENT = (
     TypeSafeRateLimitError,
@@ -55,6 +58,15 @@ class JevClient:
             timeout=config.timeout,
         )
         self.calls = 0
+
+        # The shim proxies /v1/chat/completions through to vLLM, which is how
+        # the agent prompts are served. Decision questions and generation share
+        # one endpoint and one set of credentials.
+        self.chat = OpenAI(
+            base_url=f"{(config.base_url or '').rstrip('/')}/v1",
+            api_key=config.api_key or "x",
+            timeout=config.timeout,
+        )
 
     def close(self) -> None:
         self.client.close()
@@ -82,6 +94,37 @@ class JevClient:
         )
         self.calls += 1
         return response
+
+    @retry(
+        retry=retry_if_exception_type(Exception),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(min=1, max=15),
+        reraise=True,
+    )
+    def view(self, prompt: str, state: dict, schema: type[AgentView]) -> AgentView:
+        """Run an agent prompt and validate the JSON it returns.
+
+        The prompts ask for a strict JSON object and nothing else. A response
+        that will not parse or will not validate raises, so the caller records
+        an explicit ``inference_status`` instead of quietly accepting a
+        malformed view.
+        """
+        response = self.chat.chat.completions.create(
+            model=self.config.model or "qwen",
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(state, sort_keys=True)},
+            ],
+        )
+        self.calls += 1
+        text = response.choices[0].message.content or ""
+        start, end = text.find("{"), text.rfind("}")
+        if not 0 <= start < end:
+            raise ValueError("agent returned no JSON object")
+        return schema.model_validate(json.loads(text[start : end + 1]))
 
 
 def resolve_model(config: JevConfig) -> str:

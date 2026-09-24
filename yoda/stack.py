@@ -179,11 +179,6 @@ def resolve_features(
         if channel in supplied:
             resolved[channel] = supplied[channel]
             continue
-        if channel != "news" and research.specialists.backend(channel) == "numeric":
-            # The conventional arm: the raw indicator cube the panel already
-            # carries, which is also what the OpenJev state is built from.
-            resolved[channel] = panel.features[channel]
-            continue
         resolved[channel], _ = build_jev_features(panel, config, channel)
     return resolved
 
@@ -213,7 +208,6 @@ def build_stack(
             z_dim=research.specialists.z_dim,
             ridge_alpha=research.specialists.ridge_alpha,
             seed=research.specialists.seed,
-            model=getattr(research.specialists, f"{name}_model", None),
         )
         specialist.fit(features[name][train_rows][:, universe], targets)
         specialists[name] = specialist

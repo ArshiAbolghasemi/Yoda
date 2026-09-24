@@ -85,23 +85,6 @@ class SpecialistsConfig:
     z_dim: int = 28
     ridge_alpha: float = 10.0
     seed: int = 7
-    # Numeric head per channel. See yoda/specialists/base.py::make_head.
-    technical_model: str = "mlp"  # mlp | ridge | gbm | pcr
-    volatility_model: str = "mlp"  # mlp | gbm | har | ridge | pcr
-    news_model: str = "mlp"  # mlp | ridge | gbm | pcr
-    # Feature backend per channel. OpenJev is the default; ``numeric`` keeps the
-    # conventional-model arm the specialist ablation compares against.
-    technical_backend: str = "jev"  # jev | numeric
-    volatility_backend: str = "jev"  # jev | numeric
-
-    def __post_init__(self) -> None:
-        for channel in ("technical", "volatility"):
-            backend = getattr(self, f"{channel}_backend")
-            if backend not in {"jev", "numeric"}:
-                raise ValueError(f"Unknown {channel} backend: {backend}")
-
-    def backend(self, channel: str) -> str:
-        return getattr(self, f"{channel}_backend", "jev")
 
 
 @dataclass(frozen=True)
@@ -124,6 +107,8 @@ class JevConfig:
     prompt_version: str = "v1"  # part of the cache key
     max_concurrency: int = 8
     timeout: float = 120.0
+    temperature: float = 0.0  # deterministic: the same state must give the same view
+    max_tokens: int = 1200  # enough for the structured view, not for an essay
     cache: str = "processed/jev"  # one parquet per channel
     # Deterministic fake answers instead of inference. For CI and dry runs
     # only: every run made this way is stamped ``synthetic`` in run_meta.json

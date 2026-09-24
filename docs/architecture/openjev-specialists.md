@@ -124,49 +124,47 @@ JEV__CACHE=processed/jev
 
 Nothing about the endpoint appears in a specialist implementation.
 
-## The three decision tasks
+## The three agents
 
-Each channel sends **one** `system_one` call carrying only its own
-point-in-time inputs. No channel sees future returns, future indicators, or
-future headlines.
+Each channel has its own prompt, stored verbatim in
+`yoda/specialists/prompts/agents.py`, and returns a strict JSON view validated
+against a Pydantic schema. The prompts live in one package so a revision is a
+reviewable diff, and `JEV__PROMPT_VERSION` keys the cache: changing a prompt
+invalidates every answer it produced.
 
-### Technical → direction
+### One common representation
 
-| | |
-|---|---|
-| State | `rsi_14`, `macd_histogram`, `roc_5`, `roc_20`, `stoch_k_14`, `williams_r_14`, `cci_20`, `adx_14`, `bb_percent_20`, `keltner_percent` |
-| Question | `Choice` over `down / flat / up` for the configured horizon |
-| Columns | `p_down`, `p_flat`, `p_up`, `confidence`, `edge = p_up − p_down` |
+All three expose the **same six core variables**, which is what makes Tail-VoI
+computable over them — the gate compares channels, and can only do that if they
+speak one language:
 
-`mu_hat_technical` is derived from the distribution through the channel's head
-(`edge` is the signed view; the head learns its scale in return units on the
-training window).
+| | Variable | Range |
+|---|---|---|
+| `μ` | `expected_return_score` — direction | −1 … 1 |
+| `m` | `expected_magnitude` — size of the move | 0 … 1 |
+| `c` | `confidence` | 0 … 1 |
+| `u` | `epistemic_uncertainty` | 0 … 1 |
+| `τ` | `downside_tail_risk` | 0 … 1 |
+| `r` | `regime_shift_probability` | 0 … 1 |
 
-### Volatility → regime
+The volatility agent maps differently and deliberately: its `μ` is
+`directional_bias` (its secondary view) and its `m` is `volatility_score` — the
+expected *size* of the move, not its direction. Each agent then adds its own
+fields on top: `trend_strength`, `signal_agreement`, `heavy_tail_score`,
+`jump_risk`, `liquidity_stress`, `event_types` and so on.
 
-A **separate** decision task, not a reuse of the directional one.
+| Agent | Sees | Adds beyond the core |
+|---|---|---|
+| news | point-in-time headlines only | `upside_tail_potential`, `volatility_impact`, `event_types` |
+| technical | price, momentum, trend, volume, market structure | `trend_strength`, `momentum_score`, `volume_confirmation`, `breakout`/`breakdown_probability`, `signal_agreement` |
+| volatility | realized vol, ATR, band widths, drawdowns, dispersion | `volatility_regime`, `tail_event_probability`, `tail_severity`, `negative_skew_risk`, `heavy_tail_score`, `jump_risk`, `liquidity_stress`, systemic vs idiosyncratic split |
 
-| | |
-|---|---|
-| State | `atr_14`, `bb_width_20`, `keltner_width`, `realized_vol_1`, `realized_vol_5`, `realized_vol_22` |
-| Questions | `Choice` over `low / normal / high / extreme`, plus a `Noul` spike probability |
-| Columns | `p_low`, `p_normal`, `p_high`, `p_extreme`, `confidence`, `p_spike`, `regime_level` |
+### Numbers and prose go different ways
 
-`regime_level` is the probability-weighted regime index (0 calm → 3 crisis).
-This channel represents expected *risk*; it never enters `mu` — it conditions
-the copula.
-
-### News → sentiment and tail relevance
-
-| | |
-|---|---|
-| State | the processed headlines for that asset-day, plus the date |
-| Questions | `Choice` over `bearish / neutral / bullish`, `Noul` downside-tail relevance, `Noul` volatility-event relevance |
-| Columns | `p_bearish`, `p_neutral`, `p_bullish`, `confidence`, `sentiment`, `p_tail_risk`, `p_vol_event` |
-
-No explanations, no recommendations — typed answers only. **Empty-headline rows
-never reach the model**: they short-circuit to a deterministic uniform record,
-so the no-news case is exactly reproducible and costs nothing.
+The numeric fields become `z_i` and feed the gate, the copula and the
+optimizer. `view_summary` and the evidence lists are kept as the **semantic
+message for the CIO** and never reach the numeric path — the gate must not be
+able to key off free text it cannot calibrate.
 
 ## Caching
 

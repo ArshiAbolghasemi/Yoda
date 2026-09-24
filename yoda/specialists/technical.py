@@ -1,16 +1,12 @@
-"""OpenJev technical specialist.
+"""The OpenJev technical agent's specialist.
 
-Estimates future directional behaviour from price and technical-analysis
-information only. It never sees news, future returns, future prices, realised
-future volatility, or any target label - its information set is built in
-:mod:`yoda.specialists.jev.states` and contains nothing dated after ``t``.
+The agent reads price, momentum, trend, volume and market structure at date
+``t`` and returns a directional view. This turns that view into
+``mu_hat_technical``.
 
-The decision bundle is one ``choice`` (down / flat / up over the configured
-horizon), one ``score`` (trend strength) and one ``noul`` (reversal risk).
-
-``mu_hat_technical`` comes from the head, not from a hand-assigned conversion.
-``P_up - P_down`` is a signal, not a percentage return; the head learns its
-scale in return units on the training window.
+``expected_return_score`` is a score on [-1, 1], not a percentage return. The
+prompt says so explicitly, and the head is what supplies the missing scale: a
+ridge fit onto the realised forward return over the training window.
 """
 
 from __future__ import annotations
@@ -19,7 +15,6 @@ from yoda.specialists.base import BaseSpecialist
 
 
 class TechnicalSpecialist(BaseSpecialist):
-    """``mu_hat_technical``: forward-return view from price structure."""
+    """``mu_hat_technical``: the agent's directional view, in return units."""
 
     name = "technical"
-    default_model = "mlp"

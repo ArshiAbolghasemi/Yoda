@@ -182,17 +182,9 @@ def run_backtest(
         "label": label or run_id,
         "gate": gate_name,
         "sources": list(stack.sources),
-        "backends": {
-            channel: research.specialists.backend(channel)
-            for channel in stack.sources
-            if channel != "news"
-        },
+        "backends": dict.fromkeys(stack.sources, "openjev"),
         "synthetic": research.jev.synthetic,
         "news_backend": research.news.backend,
-        "specialist_models": {
-            channel: getattr(research.specialists, f"{channel}_model", None)
-            for channel in stack.sources
-        },
         "target_horizon": research.panel.target_horizon,
         "policy": getattr(policy, "name", type(policy).__name__),
         "alpha": alpha,

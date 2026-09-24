@@ -88,3 +88,8 @@ testpaths = ["tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# The agent prompts are stored verbatim; reflowing them would change what the
+# model is asked, and the prompt text is part of the cache key.
+"yoda/specialists/prompts/agents.py" = ["E501"]

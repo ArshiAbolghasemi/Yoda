@@ -204,19 +204,51 @@ def _aligned(
     if not outcomes:
         return np.empty((0, len(columns))), np.empty(0, dtype=np.int64)
     matrix = np.asarray(probabilities, dtype=np.float64)
-    total = matrix.sum(axis=1, keepdims=True)
-    matrix = np.divide(
-        matrix, total, out=np.full_like(matrix, 1 / len(columns)), where=total > 0
-    )
     return matrix, np.asarray(outcomes, dtype=np.int64)
+
+
+def _confidence_weighted(signed: np.ndarray, confidence: np.ndarray) -> np.ndarray:
+    """A signed score plus a confidence -> a three-class distribution.
+
+    ``confidence = 0`` collapses to uniform: the agent said it does not know.
+    ``confidence = 1`` puts the whole mass on the side the score points to.
+    """
+    magnitude = np.clip(np.abs(signed), 0.0, 1.0) * np.clip(confidence, 0.0, 1.0)
+    flat = 1.0 - magnitude
+    down = np.where(signed < 0, magnitude, 0.0)
+    up = np.where(signed > 0, magnitude, 0.0)
+    stacked = np.column_stack([down, flat, up])
+    return stacked / stacked.sum(axis=1, keepdims=True)
+
+
+def _signed_to_classes(table, panel, column, labels, rows):
+    raw, outcomes = _aligned(table, panel, (column, "confidence"), labels, rows)
+    if not raw.size:
+        return raw.reshape(0, 3), outcomes
+    return _confidence_weighted(raw[:, 0], raw[:, 1]), outcomes
+
+
+def _score_to_regimes(table, panel, column, labels, rows):
+    """A [0,1] magnitude -> four ordered volatility-regime buckets."""
+    raw, outcomes = _aligned(table, panel, (column, "confidence"), labels, rows)
+    if not raw.size:
+        return raw.reshape(0, 4), outcomes
+    score = np.clip(raw[:, 0], 0.0, 1.0)
+    edges = np.array([0.125, 0.375, 0.625, 0.875])
+    distance = np.abs(score[:, None] - edges[None, :])
+    weight = np.exp(-distance / 0.15)
+    return weight / weight.sum(axis=1, keepdims=True), outcomes
 
 
 def evaluate_technical(
     table: pd.DataFrame, panel: AlignedPanel, rows: np.ndarray
 ) -> dict[str, float]:
     labels = direction_labels(panel)
-    probabilities, outcomes = _aligned(
-        table, panel, ("p_down", "p_flat", "p_up"), labels, rows
+    # The agents report a signed score, not a distribution, so it is bucketed
+    # into down/flat/up before scoring. Magnitude and confidence widen the
+    # implied flat band: a low-confidence score is a weaker directional claim.
+    probabilities, outcomes = _signed_to_classes(
+        table, panel, "expected_return_score", labels, rows
     )
     return classification_report(probabilities, outcomes)
 
@@ -225,12 +257,8 @@ def evaluate_volatility(
     table: pd.DataFrame, panel: AlignedPanel, rows: np.ndarray
 ) -> dict[str, float]:
     labels = regime_labels(panel)
-    probabilities, outcomes = _aligned(
-        table,
-        panel,
-        ("p_vol_low", "p_vol_normal", "p_vol_high", "p_vol_extreme"),
-        labels,
-        rows,
+    probabilities, outcomes = _score_to_regimes(
+        table, panel, "expected_magnitude", labels, rows
     )
     return classification_report(probabilities, outcomes)
 
@@ -246,20 +274,9 @@ def evaluate_news(
     labels = direction_labels(panel)
     # The sentiment rubric has five levels; fold to down/flat/up so it can be
     # scored against the same directional label the technical channel uses.
-    columns = (
-        "sentiment_p0",
-        "sentiment_p1",
-        "sentiment_p2",
-        "sentiment_p3",
-        "sentiment_p4",
+    probabilities, outcomes = _signed_to_classes(
+        table, panel, "expected_return_score", labels, rows
     )
-    five, outcomes = _aligned(table, panel, columns, labels, rows)
-    if five.size:
-        probabilities = np.column_stack(
-            [five[:, 0] + five[:, 1], five[:, 2], five[:, 3] + five[:, 4]]
-        )
-    else:
-        probabilities = five.reshape(0, 3)
     report = classification_report(probabilities, outcomes)
     if len(outcomes):
         sentiment = probabilities[:, 2] - probabilities[:, 0]

@@ -16,10 +16,6 @@ Families
 ``policy``
     The static risk rule vs the SAC controller - the only thing that varies
     inside the CIO.
-``openjev``
-    Conventional specialists versus OpenJev probabilistic specialists, one
-    channel at a time and in every combination. **The primary research
-    question.**
 ``sources``
     Agent-removal. Each arm *deletes* a channel from the Tail-VoI input rather
     than zeroing it, so the gate renormalises over what remains and the measured
@@ -58,7 +54,6 @@ FAMILIES: tuple[str, ...] = (
     "gate",
     "optimizer",
     "policy",
-    "openjev",
     "sources",
     "horizon",
 )
@@ -89,38 +84,6 @@ class Arm:
     horizon: int | None = None
     optimizer: Callable[[], DROCVaROptimizer] | None = None
     overrides: dict = field(default_factory=dict)
-
-
-def _jev_arms() -> list[Arm]:
-    """Conventional specialists versus OpenJev, one channel at a time.
-
-    Section 10's comparison. The conventional arm uses the numeric indicator
-    cubes and the fitted heads; every OpenJev arm swaps one or more channels to
-    calibrated probabilities and changes nothing else.
-    """
-    conventional = dict.fromkeys(("technical", "volatility"), "numeric")
-    arms = [
-        Arm(
-            "jev_none",
-            "Conventional",
-            "openjev",
-            backends={**conventional, "news": "none"},
-        )
-    ]
-    for size in (1, 2, 3):
-        for subset in itertools.combinations(SOURCES, size):
-            backends = {**conventional, "news": "none"}
-            for channel in subset:
-                backends[channel] = "jev"
-            arms.append(
-                Arm(
-                    run_id="jev_" + "_".join(subset),
-                    label="OpenJev " + "+".join(subset),
-                    family="openjev",
-                    backends=backends,
-                )
-            )
-    return arms
 
 
 def _source_arms() -> list[Arm]:
@@ -178,8 +141,6 @@ def default_arms() -> list[Arm]:
         # -- static policy vs RL controller -------------------------------------
         Arm("policy_static", "Static policy", "policy"),
         Arm("policy_rl", "RL policy", "policy", rl=True),
-        # -- conventional vs OpenJev specialists ---------------------------------
-        *_jev_arms(),
         # -- agent-removal ablations --------------------------------------------
         *_source_arms(),
         # -- prediction / rebalance horizon ---------------------------------------
@@ -309,11 +270,6 @@ def _backend_key(config: Config) -> tuple:
     return (
         research.tailvoi.sources,
         research.news.backend,
-        tuple(
-            (channel, research.specialists.backend(channel))
-            for channel in research.tailvoi.sources
-            if channel != "news"
-        ),
     )
 
 

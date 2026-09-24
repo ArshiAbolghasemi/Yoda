@@ -170,7 +170,7 @@ This is enforced structurally, not by convention:
 | `yoda.optimizer` | The DRO-CVaR solver |
 | `yoda.tailvoi` | counterfactual Δ generator, the learned gate, three baseline gates |
 | `yoda.policy` | **the seam** — `StaticRiskPolicy`, `RLRiskPolicy` |
-| `yoda.env`, `yoda.rl` | Gym environment and SAC training (RL pipeline only) |
+| `yoda.rl` | Gym environment and SAC training (RL pipeline only) |
 | `yoda.backtest` | walk-forward execution; writes artifacts, computes no metrics |
 | `yoda.evaluation` | offline scoring from those artifacts, by interval |
 | `yoda.pipeline` | the shared stack, the two pipelines, the experiment harness |

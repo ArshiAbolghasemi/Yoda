@@ -15,6 +15,7 @@ Backtesting consumes the frozen table and never calls OpenJev online.
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -27,13 +28,9 @@ from yoda.common.logger import logger
 from yoda.config.settings import Config
 from yoda.specialists.jev.cache import JevCache, cache_key
 from yoda.specialists.jev.client import JevClient, resolve_model
-from yoda.specialists.jev.questions import (
-    CHANNELS,
-    InferenceStatus,
-    InvalidResponse,
-    neutral,
-)
+from yoda.specialists.jev.questions import CHANNELS, InferenceStatus, neutral
 from yoda.specialists.jev.states import build_state_frame
+from yoda.specialists.prompts import PROMPTS, VIEWS
 
 NEWS_COUNT_SCALE = 10.0  # headlines per asset-day are single digits in this panel
 
@@ -213,35 +210,23 @@ def _fill_from_model(cache, pending, spec, channel, settings, model) -> None:
         settings.prompt_version,
     )
     with JevClient(settings) as client:
+        prompt, schema = PROMPTS[channel], VIEWS[channel]
 
         def ask(row: tuple) -> tuple[str, str, str, dict]:
             key, asset, date, state = row
             try:
-                response = client.ask(state, spec["questions"])
+                view = client.view(prompt, state, schema)
             except Exception as error:  # noqa: BLE001 - recorded, not swallowed
                 logger.warning(
-                    "jev_call_failed asset=%s date=%s error=%s", asset, date, error
+                    "jev_view_failed asset=%s date=%s error=%s", asset, date, error
                 )
-                return (
-                    key,
-                    asset,
-                    date,
-                    _failed(channel, InferenceStatus.RETRY_EXHAUSTED),
+                status = (
+                    InferenceStatus.INVALID_RESPONSE
+                    if isinstance(error, (ValueError, TypeError))
+                    else InferenceStatus.RETRY_EXHAUSTED
                 )
-            try:
-                record = spec["read"](response)
-            except InvalidResponse as error:
-                logger.warning(
-                    "jev_invalid asset=%s date=%s error=%s", asset, date, error
-                )
-                return (
-                    key,
-                    asset,
-                    date,
-                    _failed(channel, InferenceStatus.INVALID_RESPONSE),
-                )
-            record["inference_status"] = InferenceStatus.OK
-            return key, asset, date, record
+                return key, asset, date, _failed(channel, status)
+            return key, asset, date, _record(view)
 
         work = list(
             pending[["key", "asset", "date", "state"]].itertuples(
@@ -255,6 +240,35 @@ def _fill_from_model(cache, pending, spec, channel, settings, model) -> None:
                 cache.add(*result)
 
 
+def _record(view) -> dict:
+    """Split the view: numbers feed the gate, prose is kept for the CIO.
+
+    ``view_summary`` and the evidence lists never reach the numeric path - they
+    are the semantic message, and the gate must not be able to key off free
+    text it cannot calibrate.
+    """
+    numeric = {
+        name: float(value)
+        for name, value in view.model_dump().items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    numeric.update(view.core())
+    return {
+        **numeric,
+        "view_summary": view.view_summary,
+        "narrative": json.dumps(
+            {
+                "evidence": getattr(view, "key_evidence", None)
+                or getattr(view, "key_signals", None)
+                or getattr(view, "key_risk_drivers", None)
+                or [],
+                "scenarios": [s.model_dump() for s in view.risk_scenarios],
+            }
+        ),
+        "inference_status": InferenceStatus.OK,
+    }
+
+
 def _failed(channel: str, status: str) -> dict:
     record = dict.fromkeys(CHANNELS[channel]["columns"], 0.0)
     record["inference_status"] = status
@@ -262,26 +276,32 @@ def _failed(channel: str, status: str) -> dict:
 
 
 def _fill_synthetic(cache, pending, spec, channel, settings) -> None:
-    """Deterministic fake answers for CI and dry runs. Never real inference."""
+    """Deterministic fake views for CI and dry runs. Never real inference."""
     logger.warning(
-        "jev_SYNTHETIC channel=%s rows=%d - fabricated answers, NOT inference; "
+        "jev_SYNTHETIC channel=%s rows=%d - fabricated views, NOT inference; "
         "results from this run are meaningless",
         channel,
         len(pending),
     )
-    seed = abs(hash((channel, settings.prompt_version))) % 2**32
-    rng = np.random.default_rng(seed)
-    distribution = spec["distribution"]
+    rng = np.random.default_rng(abs(hash((channel, settings.prompt_version))) % 2**32)
+    columns = spec["columns"]
+    signed = {
+        "expected_return_score",
+        "directional_bias",
+        "momentum_score",
+        "volume_confirmation",
+        "volatility_impact",
+    }
     for key, asset, date in zip(
         pending["key"], pending["asset"], pending["date"], strict=True
     ):
-        draw = rng.dirichlet(np.ones(len(distribution)))
-        record = dict.fromkeys(spec["columns"], 0.0)
-        record.update(dict(zip(distribution, draw, strict=True)))
-        record[spec["signal"]] = float(draw[-1] - draw[0])
+        record = {
+            name: float(rng.uniform(-1, 1) if name in signed else rng.uniform(0, 1))
+            for name in columns
+        }
+        record["view_summary"] = "synthetic"
+        record["narrative"] = "{}"
         record["inference_status"] = InferenceStatus.OK
-        if "has_news" in record:
-            record["has_news"] = 1.0
         cache.add(key, asset, date, record)
 
 

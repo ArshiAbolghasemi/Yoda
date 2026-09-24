@@ -1,21 +1,19 @@
-"""OpenJev volatility specialist.
+"""The OpenJev volatility and tail-risk agent's specialist.
 
-Estimates the future volatility and downside-risk regime. Its information set
-is dispersion, drawdown and tail history - deliberately disjoint from the
-technical channel's, so it cannot simply restate the directional prediction.
+The agent estimates the shape of the future return distribution - regime, tail
+severity, skew, jump and liquidity risk - rather than its direction. This turns
+that view into a non-negative risk forecast that conditions the copula.
 
-The decision bundle is one ``choice`` (low / normal / high / extreme), two
-``noul`` questions (volatility spike, downside tail) and one ``score`` (risk
-severity).
+It never enters ``mu``. Its directional field (``directional_bias``) is
+deliberately secondary and reaches the gate through ``z``, not through the
+expected-return path.
 
-This channel informs portfolio risk and the Tail-VoI gate. It never enters
-``mu`` and it never constructs weights: its view conditions the copula, and the
-optimizer builds the book.
-
-``predict`` returns a non-negative risk view. Where a log target is used, the
-retransformation is corrected with Duan's smearing estimator - exponentiating a
-log-space prediction gives the geometric mean, and understating volatility
-understates CVaR, which is the one direction this system cannot be wrong in.
+**Retransformation.** The target is ``log|r|``, because volatility is
+right-skewed and a squared-error fit on raw ``|r|`` is dominated by a handful of
+crisis days. Exponentiating a log-space prediction gives the geometric mean, so
+Duan's smearing estimator corrects it non-parametrically - understating
+volatility understates CVaR, which is the one direction this system cannot be
+wrong in.
 """
 
 from __future__ import annotations
@@ -24,12 +22,11 @@ import numpy as np
 
 from yoda.specialists.base import BaseSpecialist
 
-FLOOR = 1e-6
+FLOOR = 1e-6  # keeps log(|r|) finite on exactly-zero returns
 
 
 class VolatilitySpecialist(BaseSpecialist):
     name = "volatility"
-    default_model = "mlp"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -6,7 +6,7 @@
 |---|---|
 | Input | `MarketState` — the gated view of the market plus the current book |
 | Output | `RiskParams(lam, budget, turnover_penalty, alpha)` |
-| Code | `yoda/policy/`, `yoda/env/`, `yoda/rl/` |
+| Code | `yoda/policy/`, `yoda/rl/` |
 | Contract | `RiskParamPolicy` — `act(state) → RiskParams` |
 
 This one interface is the **only** difference between the two pipelines. Compare
@@ -106,7 +106,7 @@ construction rather than by the agent's good behaviour.
 
 ### The environment
 
-`yoda/env/allocation_env.py`. Specialists, copula and gate are **frozen** — the
+`yoda/rl/allocation_env.py`. Specialists, copula and gate are **frozen** — the
 agent trains against a fixed world, which is what makes the comparison against the
 static policy an apples-to-apples statement about risk budgeting rather than about
 the whole stack.

@@ -3,7 +3,7 @@
 Stages 1-4 are the static pipeline's, reused verbatim through the same engine and
 ``fit_gate`` factory - nothing is forked. Then the specialists, copula and gate
 are frozen, SAC is trained against
-:class:`~yoda.env.allocation_env.AllocationEnv`, and the resulting
+:class:`~yoda.rl.allocation_env.AllocationEnv`, and the resulting
 :class:`~yoda.policy.rl.RLRiskPolicy` is asked for ``RiskParams`` at exactly the
 point where ``tail_voli_risk`` asks its static rule.
 
