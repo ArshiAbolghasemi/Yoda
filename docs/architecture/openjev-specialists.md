@@ -166,12 +166,17 @@ RuntimeError: cutlass_scaled_mm_sm80_epilogue,
   csrc/.../quantization/w8a8/cutlass/scaled_mm_c2x.cu:89
 ```
 
+vLLM does not catch this itself: `CutlassFP8ScaledMMLinearKernel.is_supported()`
+returns `True` for any CUDA device without checking compute capability, so it
+wins kernel selection on an A100 and then the sm80 CUTLASS dispatcher — which is
+int8-only — rejects the FP8 tensors.
+
 `serve.sh` reads the card's compute capability and picks the right path:
 
 | Compute capability | What it does |
 |---|---|
 | ≥ 8.9 | native FP8 |
-| < 8.9 | sets `VLLM_TEST_FORCE_FP8_MARLIN=1` — FP8 weights, 16-bit matmul |
+| < 8.9 | `VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel` — selection falls through to Marlin FP8, which supports 7.5+ |
 
 Marlin keeps the memory win (weights stay half-size) and gives up the speed
 one, which is the difference between serving and not serving on an A100. Set

@@ -80,10 +80,17 @@ torch_cuda_major() { run python -c \
 compute_cap() { nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
   | head -1 | tr -d '.'; }
 
-# FP8 has no hardware support below SM89. vLLM can still honour an FP8
-# checkpoint there by dequantising through its Marlin kernels: the weights stay
-# half-sized in memory, the matmul runs in 16-bit. Slower than real FP8, but it
-# is the difference between serving and not serving on an A100.
+# FP8 has no hardware support below SM89, and vLLM does not notice on its own.
+# CutlassFP8ScaledMMLinearKernel.is_supported() returns True for any CUDA
+# device without checking compute capability, so on an A100 it wins kernel
+# selection and then the sm80 CUTLASS dispatcher - which is int8-only - aborts:
+#
+#   RuntimeError: cutlass_scaled_mm_sm80_epilogue, scaled_mm_c2x.cu:89
+#
+# Disabling that kernel lets selection fall through to the Marlin FP8 one,
+# which supports capability 7.5+: the weights stay half-sized in memory and the
+# matmul runs in 16-bit. Slower than real FP8, and the difference between
+# serving and not serving on an A100.
 QUANT_ARGS=()
 fp8_mode() {
   local cap; cap=$(compute_cap || true)
@@ -97,7 +104,7 @@ fp8_mode() {
   if [ -z "$cap" ] || [ "$cap" -ge 89 ]; then
     say "quantization: fp8 (native, sm${cap:-?})"
   else
-    export VLLM_TEST_FORCE_FP8_MARLIN=1
+    export VLLM_DISABLED_KERNELS="${VLLM_DISABLED_KERNELS:+$VLLM_DISABLED_KERNELS,}CutlassFP8ScaledMMLinearKernel"
     say "quantization: fp8 via Marlin - sm$cap has no FP8 tensor cores"
   fi
 }
