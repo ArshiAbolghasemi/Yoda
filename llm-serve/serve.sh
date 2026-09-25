@@ -42,6 +42,11 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # stops mattering - the cache no longer shrinks when weights or CUDA graphs
 # grow, so throughput is reproducible across vLLM upgrades.
 KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"
+# The model card serves FP8. That needs SM89+ (Ada, Hopper) hardware; on an
+# SM80 card such as the A100 the CUTLASS W8A8 kernel aborts with
+# "cutlass_scaled_mm_sm80_epilogue". Set QUANTIZATION=none to serve the
+# unquantised weights instead - see fp8_mode() below for the middle road.
+QUANTIZATION="${QUANTIZATION:-fp8}"
 
 LOGS=./logs
 PIDS=./run
@@ -71,6 +76,31 @@ driver_major() { nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/
 # 12 driver, the cu130 build needs r580+ or the forward-compat libs.
 torch_cuda_major() { run python -c \
   "import torch; print((torch.version.cuda or '0').split('.')[0])" 2>/dev/null; }
+
+compute_cap() { nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
+  | head -1 | tr -d '.'; }
+
+# FP8 has no hardware support below SM89. vLLM can still honour an FP8
+# checkpoint there by dequantising through its Marlin kernels: the weights stay
+# half-sized in memory, the matmul runs in 16-bit. Slower than real FP8, but it
+# is the difference between serving and not serving on an A100.
+QUANT_ARGS=()
+fp8_mode() {
+  local cap; cap=$(compute_cap || true)
+  [ "$QUANTIZATION" = "none" ] && QUANTIZATION=""
+  if [ -z "$QUANTIZATION" ]; then
+    say "quantization: none - serving the weights as they are on disk"
+    return
+  fi
+  QUANT_ARGS=(--quantization "$QUANTIZATION")
+  [ "$QUANTIZATION" = "fp8" ] || { say "quantization: $QUANTIZATION"; return; }
+  if [ -z "$cap" ] || [ "$cap" -ge 89 ]; then
+    say "quantization: fp8 (native, sm${cap:-?})"
+  else
+    export VLLM_TEST_FORCE_FP8_MARLIN=1
+    say "quantization: fp8 via Marlin - sm$cap has no FP8 tensor cores"
+  fi
+}
 
 # The driver story, printed once so a failure downstream is already explained.
 check_driver() {
@@ -187,7 +217,7 @@ start_vllm() {
     --max-num-seqs 256 \
     --max-logprobs 64 \
     --gdn-prefill-backend triton \
-    --quantization fp8 \
+    "${QUANT_ARGS[@]}" \
     >"$LOGS/vllm.log" 2>&1 &
   echo $! >"$PIDS/vllm.pid"
   wait_for vllm "http://$HOST:$VLLM_PORT/v1/models"
@@ -231,7 +261,7 @@ case "${1:-start}" in
     ensure_deps; check_driver; download ;;
 
   start)
-    ensure_deps; check_driver; download; start_vllm; start_shim
+    ensure_deps; check_driver; fp8_mode; download; start_vllm; start_shim
     cat <<MSG
 
 OpenJev is serving.

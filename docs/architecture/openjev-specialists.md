@@ -146,7 +146,7 @@ Both paths use the serving configuration published on the model card:
 
 | Setting | Value |
 |---|---|
-| quantization | `fp8` |
+| quantization | `fp8` — needs SM89+, see below |
 | prefix caching | enabled |
 | max model length | 16384 |
 | max concurrent sequences | 256 |
@@ -154,6 +154,30 @@ Both paths use the serving configuration published on the model card:
 | max logprobs | 64 |
 | prefill backend | `--gdn-prefill-backend triton` |
 | pinned versions | `vllm==0.29.0` (in the `cu130` extra), `openai==3.16.2`, `httpx==0.28.1` |
+
+### FP8 needs SM89 or newer
+
+The model card serves FP8, which has no hardware support below **SM89** (Ada
+L40S, Hopper H100). An A100 is SM80, and vLLM's CUTLASS W8A8 kernel aborts
+there:
+
+```
+RuntimeError: cutlass_scaled_mm_sm80_epilogue,
+  csrc/.../quantization/w8a8/cutlass/scaled_mm_c2x.cu:89
+```
+
+`serve.sh` reads the card's compute capability and picks the right path:
+
+| Compute capability | What it does |
+|---|---|
+| ≥ 8.9 | native FP8 |
+| < 8.9 | sets `VLLM_TEST_FORCE_FP8_MARLIN=1` — FP8 weights, 16-bit matmul |
+
+Marlin keeps the memory win (weights stay half-size) and gives up the speed
+one, which is the difference between serving and not serving on an A100. Set
+`QUANTIZATION=none` in the root `.env` to serve unquantised instead — at 27B
+that is ~54 GB of weights, so re-read `KV_CACHE_MEMORY` from the boot log
+afterwards.
 
 ### Sizing the KV cache
 
