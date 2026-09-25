@@ -66,22 +66,33 @@ fi
 driver_major() { nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null \
   | head -1 | cut -d. -f1; }
 
+# Which CUDA the installed torch was built against - 12 or 13. That, not the
+# repo, decides what the driver has to satisfy: the cu129 build runs on a CUDA
+# 12 driver, the cu130 build needs r580+ or the forward-compat libs.
+torch_cuda_major() { run python -c \
+  "import torch; print((torch.version.cuda or '0').split('.')[0])" 2>/dev/null; }
+
 # The driver story, printed once so a failure downstream is already explained.
 check_driver() {
-  local major; major=$(driver_major || true)   # absent nvidia-smi must not abort
+  local major cuda
+  major=$(driver_major || true)          # absent nvidia-smi must not abort
   [ -n "$major" ] || die "no nvidia-smi - this script serves on an NVIDIA GPU"
-  if [ "$major" -ge 580 ]; then
+  cuda=$(torch_cuda_major || true)
+
+  if [ "$cuda" != "13" ]; then
+    say "driver r$major, CUDA $cuda build - no forward compatibility needed"
+  elif [ "$major" -ge 580 ]; then
     say "driver r$major - CUDA 13 native"
   elif [ -n "$CUDA_COMPAT" ]; then
     say "driver r$major (<580) - using forward-compat libs in $CUDA_COMPAT"
   else
-    die "driver r$major is below the r580 that CUDA 13 requires, and no
-  forward-compatibility libs are installed. vLLM's wheel is a CUDA 13 build,
-  so it cannot run here as-is. Either:
+    die "this is a CUDA 13 build and driver r$major is below the r580 it needs,
+  with no forward-compatibility libs installed. Three ways out:
+    * switch to the CUDA 12 build, which runs on this driver as-is:
+        (cd $ROOT && uv sync --extra cu129)
     * install the compat package (datacenter GPUs only, A100 included):
         apt-get install -y cuda-compat-13-0
-      then re-run; this script picks it up from /usr/local/cuda/compat
-    * or update the host driver to r580+."
+    * update the host driver to r580+."
   fi
 }
 
@@ -107,17 +118,18 @@ print("vllm:   ok")
   printf '%s\n' "$out" >&2
   case "$out" in
     *"No module named 'vllm'"*)
-      die "vLLM is not in this environment. It ships with the CUDA 13 extras:
-    (cd $ROOT && uv sync --extra cu130)" ;;
+      die "vLLM is not in this environment. Two extras carry it:
+    (cd $ROOT && uv sync --extra cu129)   # CUDA 12 hosts, driver r570+
+    (cd $ROOT && uv sync --extra cu130)   # CUDA 13 hosts, driver r580+" ;;
     *libcudart.so.13*)
       die "this environment has a CUDA 12 torch; vLLM needs the CUDA 13 one.
-  libcudart.so.13 ships inside the cu130 torch wheel, so:
-    (cd $ROOT && uv sync --extra cu130)
-  Every other channel is research-only and deliberately does not pull vLLM." ;;
+  On a CUDA 12 host use the cu129 channel, which has a matching vLLM build:
+    (cd $ROOT && uv sync --extra cu129)
+  cu126/cu128/cu132 are research-only - vLLM publishes no wheel for them." ;;
     *"compiled with different CUDA versions"*)
       die "torch and torchaudio/torchvision disagree on CUDA - see above. They
-  must come from one channel, which only cu130 publishes in full:
-    (cd $ROOT && uv sync --extra cu130)" ;;
+  must all come from one channel; cu129 and cu130 are the two complete sets:
+    (cd $ROOT && uv sync --extra cu129)   # or cu130" ;;
     *"CUDA driver version is insufficient"*|*libcuda.so*)
       die "the CUDA 13 build loaded but the driver will not accept it - see
   above. Install the forward-compat package and re-run:
@@ -216,10 +228,10 @@ stop_one() {
 
 case "${1:-start}" in
   download)
-    check_driver; ensure_deps; download ;;
+    ensure_deps; check_driver; download ;;
 
   start)
-    check_driver; ensure_deps; download; start_vllm; start_shim
+    ensure_deps; check_driver; download; start_vllm; start_shim
     cat <<MSG
 
 OpenJev is serving.

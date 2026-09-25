@@ -83,11 +83,12 @@ cd llm-serve
 Reads the project's **root `.env`** — the same file the compose stack uses, so
 the whole project is configured in one place. There is no `llm-serve/.env`.
 
-vLLM ships with the **`cu130` extra**, so one `uv sync` gives you both the
-research stack and the server:
+vLLM ships with the **`cu129`** and **`cu130`** extras, so one `uv sync` gives
+you both the research stack and the server:
 
 ```bash
-uv sync --extra cu130     # serving and research, one environment
+uv sync --extra cu129     # CUDA 12 host (driver r570+)
+uv sync --extra cu130     # CUDA 13 host (driver r580+)
 ```
 
 It lives there rather than in the main dependencies because every vLLM wheel on
@@ -96,7 +97,12 @@ default PyPI build to CUDA 13 at torch 2.11.0, and vLLM followed. The
 `cu126`/`cu128`/`cu129` channels ship `libcudart.so.12`, so a vLLM installed
 beside them resolves cleanly and then dies at import with
 `ImportError: libcudart.so.13: cannot open shared object file`. Scoping it to
-`cu130` makes that pairing impossible to produce.
+the matching channel makes that pairing impossible to produce.
+
+vLLM compiles one wheel per CUDA minor version and publishes them at
+`wheels.vllm.ai`; only `cu129` and `cu130` exist. PyPI carries the CUDA 13 build
+alone, so each serving extra pulls vLLM from its own index rather than PyPI.
+`cu126`, `cu128` and `cu132` have no vLLM build and stay research-only.
 
 vLLM also pulls `torchaudio`, `torchvision` and `torchcodec`, each of which
 asserts an **exact** CUDA match against torch at import:
@@ -110,18 +116,22 @@ they silently mismatch any non-default torch. All three are therefore pinned to
 the same `cu130` index as torch. `cu132` publishes no torchaudio at all, which
 is why it is research-only.
 
-### The GPU host needs driver r580+
+### Matching the host driver
 
 CUDA 13 is a two-sided requirement, and only the first half comes from `uv sync`:
 
 | Half | Provided by | Symptom when missing |
 |---|---|---|
-| `libcudart.so.13` (userspace) | the cu130 torch wheel | `ImportError: libcudart.so.13` |
-| driver r580+ (kernel) | the **host**, not the venv | `CUDA driver version is insufficient` |
+| matching `libcudart` | the channel's torch wheel | `ImportError: libcudart.so.13` |
+| a driver the build accepts | the **host**, not the venv | `CUDA driver version is insufficient` |
 
-An older datacenter GPU host — an A100 on r570, say — can still run CUDA 13
-through NVIDIA's forward-compatibility package, which supplies a newer user-mode
-driver on top of the older kernel module:
+**On a CUDA 12 host, use `cu129`** — a 12.9 build runs on an r570 driver through
+CUDA minor-version compatibility, with nothing else to install. Reach for
+`cu130` only when the host is r580+.
+
+If you need the CUDA 13 build on an older datacenter GPU anyway, NVIDIA's
+forward-compatibility package supplies a newer user-mode driver on top of the
+older kernel module:
 
 ```bash
 apt-get install -y cuda-compat-13-0

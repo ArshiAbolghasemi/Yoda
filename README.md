@@ -84,31 +84,38 @@ Requires Python ≥ 3.14 and [uv](https://docs.astral.sh/uv/). `.env` is git-ign
 specific build:
 
 ```bash
-uv sync --extra cu130     # or cu132, cu129, cu128, cu126, cpu
+uv sync --extra cu129     # or cu130, cu132, cu128, cu126, cpu
 ```
 
 The CUDA extras are mutually exclusive. The channels cap at different torch
 versions, so the lockfile pins each to the newest build it publishes:
 
-| Extra | torch | vLLM | Use for |
-|---|---|---|---|
-| `cu130` | 2.13.0+cu130 | 0.29.0 | serving OpenJev **and** research |
-| `cu132` | 2.13.0+cu132 | — | research on CUDA 13.2 |
-| `cu129` · `cu126` | 2.13.0 | — | research on a CUDA 12 driver |
-| `cu128` | 2.11.0 | — | research on a CUDA 12 driver, older torch |
-| `cpu` | 2.13.0+cpu | — | no GPU |
+| Extra | torch | vLLM | Driver | Use for |
+|---|---|---|---|---|
+| `cu129` | 2.13.0+cu129 | 0.29.0+cu129 | r570+ | serving **and** research on CUDA 12 |
+| `cu130` | 2.13.0+cu130 | 0.29.0 | r580+ | serving **and** research on CUDA 13 |
+| `cu132` | 2.13.0+cu132 | — | r580+ | research on CUDA 13.2 |
+| `cu128` | 2.11.0+cu128 | — | r525+ | research, older torch |
+| `cu126` | 2.13.0+cu126 | — | r525+ | research |
+| `cpu` | 2.13.0+cpu | — | — | no GPU |
 
-**Only `cu130` carries vLLM.** Every PyPI vLLM wheel that supports Python 3.14 is
-a CUDA 13 build, so it links `libcudart.so.13`; the cu12x channels ship
-`libcudart.so.12` and would install a vLLM that resolves fine and then fails on
-import. vLLM also pulls `torchaudio`/`torchvision`/`torchcodec`, which refuse to
-load unless their CUDA matches torch's exactly — and `cu130` is the only channel
-publishing all four. So `cu130` carries the whole serving set, pinned to that one
-index, and every broken mix is unrepresentable rather than a runtime surprise.
+**Two channels carry vLLM: `cu129` and `cu130`.** vLLM compiles one wheel per
+CUDA minor and publishes them at `wheels.vllm.ai`, where exactly those two exist.
+PyPI hosts the CUDA 13 build alone, which is why a plain `pip install vllm`
+beside a CUDA 12 torch resolves cleanly and then fails with
+`ImportError: libcudart.so.13`. Each serving extra pulls vLLM from its own index
+instead.
 
-`cu132` is research-only for that reason: PyTorch publishes no `+cu132`
-torchaudio, so a vLLM there dies with *"PyTorch has CUDA version 13.2 whereas
-TorchAudio has CUDA version 13.0"*.
+vLLM also pulls `torchaudio`/`torchvision`/`torchcodec`, which refuse to load
+unless their CUDA matches torch's exactly, so all five are pinned to the same
+channel and every broken mix is unrepresentable.
+
+`cu126`, `cu128` and `cu132` are research-only: vLLM publishes no wheel for
+them, and `cu132` has no torchaudio either.
+
+**Pick `cu129` unless the host driver is r580+.** A CUDA 12.9 build runs on any
+r570 driver through CUDA minor-version compatibility, so it needs nothing extra.
+`cu130` needs r580+, or `cuda-compat-13-0` on a datacenter GPU.
 
 Serving therefore also needs an **NVIDIA driver r580+** on the host — or
 `cuda-compat-13-0` on a datacenter GPU with an older one. `llm-serve/serve.sh`

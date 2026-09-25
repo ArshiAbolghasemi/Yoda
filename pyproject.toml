@@ -30,22 +30,35 @@ dependencies = [
 
 [project.optional-dependencies]
 # Torch build selection. Pick exactly one; they are mutually exclusive.
-#   uv sync --extra cu130      (Linux/Windows CUDA 13.0 - the serving build)
-#   uv sync --extra cu132      (Linux/Windows CUDA 13.2, research only)
-#   uv sync --extra cu129      (Linux/Windows CUDA 12.9, research only)
+#   uv sync --extra cu129      (CUDA 12.9 - serves, and runs on a 12.8 driver)
+#   uv sync --extra cu130      (CUDA 13.0 - serves, needs driver r580+)
+#   uv sync --extra cu126      (CUDA 12.6, research only)
+#   uv sync --extra cu128      (CUDA 12.8, research only)
+#   uv sync --extra cu132      (CUDA 13.2, research only)
 #   uv sync --extra cpu        (CPU-only wheels)
-# Only cu130 carries vLLM; every other channel is research-only. With no extra,
-# torch resolves from PyPI (CUDA 13 on Linux, MPS/CPU on macOS).
+#
+# vLLM publishes one wheel per CUDA major/minor at wheels.vllm.ai, and only two
+# of them exist: cu129 and cu130. PyPI carries the cu130 build alone, which is
+# why pairing plain `pip install vllm` with a CUDA 12 torch fails on
+# libcudart.so.13. Each serving extra therefore pulls vLLM from its own index.
+#
+#   cu129  vllm 0.29.0+cu129, torch 2.13.0+cu129   <- CUDA 12 hosts
+#   cu130  vllm 0.29.0+cu130, torch 2.13.0+cu130   <- CUDA 13 hosts
+#   cu126 / cu128 / cu132  no vLLM build published - research only
+#
+# torchaudio/torchvision/torchcodec ride along because vLLM pulls them and each
+# asserts an exact CUDA match against torch at import; all are pinned to the
+# matching index below so they cannot disagree.
 cpu = ["torch>=2.8.0"]
 cu126 = ["torch>=2.8.0"]
 cu128 = ["torch>=2.8.0"]
-cu129 = ["torch>=2.8.0"]
-# vLLM rides with cu130 and nowhere else. Its PyPI wheel links libcudart.so.13,
-# so a CUDA 12 torch (cu126/cu128/cu129) fails at import; and it pulls
-# torchaudio/torchvision, which assert an exact CUDA match against torch, so
-# cu130 is the one channel publishing a consistent set of all three. Scoping it
-# here makes every broken combination unrepresentable.
-# No macOS wheels either - nvidia-cudnn-frontend is linux/windows only.
+cu129 = [
+    "torch>=2.8.0",
+    "torchaudio; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchcodec; sys_platform == 'linux' or sys_platform == 'win32'",
+    "torchvision; sys_platform == 'linux' or sys_platform == 'win32'",
+    "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 cu130 = [
     "torch>=2.8.0",
     "torchaudio; sys_platform == 'linux' or sys_platform == 'win32'",
@@ -53,10 +66,9 @@ cu130 = [
     "torchvision; sys_platform == 'linux' or sys_platform == 'win32'",
     "vllm==0.29.0; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
-# cu132 is research-only: torchaudio publishes no +cu132 build, and vLLM
-# requires torchaudio, which refuses to load against a torch compiled for a
-# different CUDA ("PyTorch has CUDA version 13.2 whereas TorchAudio has 13.0").
-# Serve from cu130 until that channel appears.
+# cu132 publishes no torchaudio, which vLLM requires, and no vLLM build of its
+# own: serving from it dies with "PyTorch has CUDA version 13.2 whereas
+# TorchAudio has CUDA version 13.0".
 cu132 = ["torch>=2.8.0"]
 
 [dependency-groups]
@@ -102,6 +114,17 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+# vLLM's own per-CUDA wheel index. PyPI has the cu130 build only.
+[[tool.uv.index]]
+name = "vllm-cu129"
+url = "https://wheels.vllm.ai/0.29.0/cu129/"
+explicit = true
+
+[[tool.uv.index]]
+name = "vllm-cu130"
+url = "https://wheels.vllm.ai/0.29.0/cu130/"
+explicit = true
+
 [[tool.uv.index]]
 name = "pytorch-cu132"
 url = "https://download.pytorch.org/whl/cu132"
@@ -109,6 +132,9 @@ explicit = true
 
 [tool.uv.sources]
 # CUDA wheels exist for Linux/Windows only; macOS always falls back to PyPI.
+# torchaudio and friends must ride the same index as torch: left to PyPI they
+# track whatever CUDA PyTorch currently defaults to (13.0) and silently
+# mismatch any non-default torch.
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -117,17 +143,21 @@ torch = [
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu132", extra = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
-# vLLM pulls these, and torchaudio hard-fails when its CUDA differs from
-# torch's. Left to PyPI they track the default channel (13.0) and silently
-# mismatch a non-default torch, so they follow torch's index instead.
 torchaudio = [
+    { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchcodec = [
+    { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
+    { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+vllm = [
+    { index = "vllm-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "vllm-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [tool.pytest.ini_options]
