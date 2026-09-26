@@ -82,10 +82,11 @@ services:
       - --max-num-seqs=256
       - --max-logprobs=64
       - --gdn-prefill-backend=triton
-      # fp8 needs SM89+. On an A100 (SM80) add
+      # Always fp8: the bf16 checkpoint is ~54 GB and will not fit. On an
+      # A100 (SM80) there are no FP8 tensor cores, so add
       #   VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel
-      # to the root .env, or set QUANTIZATION=none to serve unquantised.
-      - --quantization=${QUANTIZATION:-fp8}
+      # to the root .env and vLLM falls through to the Marlin FP8 kernel.
+      - --quantization=fp8
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/v1/models')"]
       interval: 15s

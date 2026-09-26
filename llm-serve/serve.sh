@@ -42,11 +42,6 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 # stops mattering - the cache no longer shrinks when weights or CUDA graphs
 # grow, so throughput is reproducible across vLLM upgrades.
 KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"
-# The model card serves FP8. That needs SM89+ (Ada, Hopper) hardware; on an
-# SM80 card such as the A100 the CUTLASS W8A8 kernel aborts with
-# "cutlass_scaled_mm_sm80_epilogue". Set QUANTIZATION=none to serve the
-# unquantised weights instead - see fp8_mode() below for the middle road.
-QUANTIZATION="${QUANTIZATION:-fp8}"
 
 LOGS=./logs
 PIDS=./run
@@ -80,8 +75,13 @@ torch_cuda_major() { run python -c \
 compute_cap() { nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
   | head -1 | tr -d '.'; }
 
-# FP8 has no hardware support below SM89, and vLLM does not notice on its own.
-# CutlassFP8ScaledMMLinearKernel.is_supported() returns True for any CUDA
+# FP8 always. The checkpoint is bf16 on disk (~54 GB), so serving it
+# unquantised needs a card this project does not target: 48 GB cannot hold it
+# at all, and 80 GB would leave ~20 GB of KV cache against fp8's ~47. The only
+# choice here is *how* FP8 runs, never whether.
+#
+# Below SM89 there are no FP8 tensor cores, and vLLM does not notice on its
+# own: CutlassFP8ScaledMMLinearKernel.is_supported() returns True for any CUDA
 # device without checking compute capability, so on an A100 it wins kernel
 # selection and then the sm80 CUTLASS dispatcher - which is int8-only - aborts:
 #
@@ -89,18 +89,10 @@ compute_cap() { nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/
 #
 # Disabling that kernel lets selection fall through to the Marlin FP8 one,
 # which supports capability 7.5+: the weights stay half-sized in memory and the
-# matmul runs in 16-bit. Slower than real FP8, and the difference between
+# matmul runs in 16-bit. Slower than native FP8, and the difference between
 # serving and not serving on an A100.
-QUANT_ARGS=()
 fp8_mode() {
   local cap; cap=$(compute_cap || true)
-  [ "$QUANTIZATION" = "none" ] && QUANTIZATION=""
-  if [ -z "$QUANTIZATION" ]; then
-    say "quantization: none - serving the weights as they are on disk"
-    return
-  fi
-  QUANT_ARGS=(--quantization "$QUANTIZATION")
-  [ "$QUANTIZATION" = "fp8" ] || { say "quantization: $QUANTIZATION"; return; }
   if [ -z "$cap" ] || [ "$cap" -ge 89 ]; then
     say "quantization: fp8 (native, sm${cap:-?})"
   else
@@ -224,7 +216,7 @@ start_vllm() {
     --max-num-seqs 256 \
     --max-logprobs 64 \
     --gdn-prefill-backend triton \
-    "${QUANT_ARGS[@]}" \
+    --quantization fp8 \
     >"$LOGS/vllm.log" 2>&1 &
   echo $! >"$PIDS/vllm.pid"
   wait_for vllm "http://$HOST:$VLLM_PORT/v1/models"

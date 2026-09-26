@@ -146,7 +146,7 @@ Both paths use the serving configuration published on the model card:
 
 | Setting | Value |
 |---|---|
-| quantization | `fp8` — needs SM89+, see below |
+| quantization | `fp8`, always — see below |
 | prefix caching | enabled |
 | max model length | 16384 |
 | max concurrent sequences | 256 |
@@ -179,10 +179,18 @@ int8-only — rejects the FP8 tensors.
 | < 8.9 | `VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel` — selection falls through to Marlin FP8, which supports 7.5+ |
 
 Marlin keeps the memory win (weights stay half-size) and gives up the speed
-one, which is the difference between serving and not serving on an A100. Set
-`QUANTIZATION=none` in the root `.env` to serve unquantised instead — at 27B
-that is ~54 GB of weights, so re-read `KV_CACHE_MEMORY` from the boot log
-afterwards.
+one, which is the difference between serving and not serving on an A100.
+
+**There is no unquantised option.** The checkpoint is bf16 on disk — ~54 GB of
+weights — so serving it as-is does not fit a 48 GB card at all, and on 80 GB it
+would leave ~20 GB for the KV cache against fp8's ~47. `serve.sh` passes
+`--quantization fp8` unconditionally; the only thing it decides is whether that
+runs on tensor cores or through Marlin.
+
+| Card | SM | FP8 path |
+|---|---|---|
+| H200, H100, L40S, RTX 6000 Ada | 89+ | native |
+| A100, A40, RTX A6000 | 80/86 | Marlin |
 
 ### Sizing the KV cache
 
