@@ -17,13 +17,14 @@ from __future__ import annotations
 import numpy as np
 
 from yoda.backtest.engine import run_backtest
+from yoda.cio import CIOAgent
 from yoda.common.alignment import AlignedPanel, build_panel
 from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer
 from yoda.config.settings import Config
 from yoda.evaluation.report import Evaluation, evaluate
 from yoda.policy.static import StaticRiskPolicy
-from yoda.stack import AllocationStack, fit_gate
+from yoda.stack import fit_gate
 
 PIPELINE = "tail_voli_risk"
 
@@ -43,7 +44,7 @@ def run_tail_voli_risk(
     panel = panel or build_panel(config)
     alpha = config.research.optimizer.alpha
 
-    def make_policy(stack: AllocationStack, train: np.ndarray, val: np.ndarray):
+    def make_policy(cio: CIOAgent, train: np.ndarray, val: np.ndarray):
         # The seam. A fixed config-driven rule, unless the CIO is installed -
         # it owns the whole decision, so it fills this socket too rather than a
         # second policy contradicting it. The RL pipeline swaps the same call.

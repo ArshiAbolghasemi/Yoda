@@ -1,24 +1,47 @@
 # CIO
 
-The decision-maker that turns specialist views into a portfolio. It *contains*
-the two judgements and the solver, and exposes one thing — weights.
+Every specialist reports here. The CIO holds the world model it needs to read
+those reports and the machinery to act on them, and exposes one thing — weights.
 
 ```
-                       CIO
-      ┌──────────────────────────────────┐
-      │  Tail-VoI gate   → g             │
-      │  risk policy     → (λ, B, c)     │  static or SAC, by flag
-      │  DRO-CVaR        → w             │
-      └──────────────────────────────────┘
-                       │
-               portfolio weights
+    technical ─┐
+    volatility ┼─► CIO ─────────────────────────────┐
+    news ──────┘   │  Tail-VoI gate     → g         │
+                   │  Student-t copula  → scenarios │
+                   │  risk policy       → (λ, B, c) │  static or SAC, by flag
+                   │  DRO-CVaR          → w         │
+                   └────────────────────────────────┘
+                                  │
+                          portfolio weights
 ```
 
 | | |
 |---|---|
-| Input | `SpecialistOutput`, the scenario set, the current `MarketState`, `w_prev` |
-| Output | `CIODecision(weights, gate, risk)` |
+| Input | a panel row (`position`) and `w_prev` |
+| Output | `CIODecision(weights, gate, risk, state)` |
 | Code | `yoda/cio/agent.py` |
+
+## Construction is phased
+
+The gate is fitted from counterfactuals that run *through* the CIO, so the
+object has to exist before its gate does:
+
+```python
+cio = build_cio(panel, config, fold.train, TailVoIGate(...))  # specialists + copula
+cio.gate = fit_gate(config, kind)(cio, fold.train)  # counterfactuals
+cio.install_policy(make_policy(cio, fold.train, fold.val))  # static rule or SAC
+```
+
+That is not circular — the counterfactual generator *forces* gate weights
+rather than asking the gate — but it does mean a CIO is usable, deliberately,
+before its gate is fitted. Deciding before the policy is seated raises.
+
+## Why `state` is public
+
+SAC trains *against* the risk policy, so `AllocationEnv` needs the observation
+a policy would act on, without one having acted. `state(position, w_prev)`
+returns `(MarketState, TailScenarios, GateOutput)`; `decide` is that plus the
+two judgements. The counterfactual generator uses the same surface.
 
 ## What is fixed and what varies
 
@@ -28,6 +51,8 @@ The allocator is always DRO-CVaR. Two parts are selectable:
 |---|---|---|
 | gate | `TAILVOI__GATE` or `--gate` | `tailvoi` · `accuracy` · `attention` · `equal_weight` |
 | risk policy | which script you run | static rule · trained SAC |
+
+The specialists, the copula and the allocator do not vary.
 
 Tail-VoI is the proposal; the other three gates are the controls it has to
 beat, kept selectable so the claim stays falsifiable. The risk policy is the
@@ -59,9 +84,9 @@ can trust.
 - It does not emit weights itself — it composes the DRO-CVaR solver, so
   `w ≥ 0`, `Σw = 1`, the per-asset cap and `CVaR_α(w) ≤ B` remain enforced by
   the convex program.
-- It does not re-gate. The stack gates once when it builds the `MarketState`;
-  re-gating inside the CIO would pay for the same decision twice and risk the
-  two copies disagreeing.
+- It does not decide twice. `decide` is the only decision site: the backtest
+  engine calls it and records what comes back, rather than re-running
+  gate → policy → solve itself.
 - It does not touch `α`. No component redefines the risk measure it is judged
   by.
 

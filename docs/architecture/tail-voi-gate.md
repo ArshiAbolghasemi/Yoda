@@ -127,7 +127,7 @@ around `1e-3` and a raw softmax over them would be indistinguishable from unifor
 
 Unfitted, the gate logs a warning and degrades to an even gate rather than failing.
 The stack has to be assemblable before the targets exist — that is how
-`build_stack` can run before stage 3.
+`build_cio` can run before stage 3.
 
 ### Training and inference
 

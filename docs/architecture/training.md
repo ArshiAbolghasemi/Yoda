@@ -52,7 +52,7 @@ future rows.
 run_tail_voli_risk(config)
 └── run_backtest(...)
     └── for each fold:
-        ├── build_stack(panel, config, fold.train, TailVoIGate())      # stages 1-2
+        ├── build_cio(panel, config, fold.train, TailVoIGate())      # stages 1-2
         │   ├── build_news_features(...)      if NEWS__BACKEND != none
         │   ├── Specialist.fit(...)           per source
         │   └── StudentTCopula.fit(...)

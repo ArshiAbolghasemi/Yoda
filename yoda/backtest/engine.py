@@ -4,7 +4,7 @@ The engine fits on a fold's training rows, trades the fold's test rows, applies
 transaction costs, and writes artifacts. It computes no performance metrics:
 that is :mod:`yoda.evaluation`'s job, offline, from the files written here.
 
-No lookahead anywhere. At row ``t`` the stack sees features up to and including
+No lookahead anywhere. At row ``t`` the CIO sees features up to and including
 ``t``, the policy chooses ``RiskParams``, the optimizer chooses the book, and the
 book earns ``returns[t + 1]``. Between rebalances the book drifts with the
 market rather than being silently rebalanced for free.
@@ -20,15 +20,16 @@ import numpy as np
 import pandas as pd
 
 from yoda.backtest.artifacts import config_hash, write_run
+from yoda.cio import CIOAgent, build_cio
 from yoda.common.alignment import AlignedPanel
 from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer, Gate, RiskParamPolicy
 from yoda.config.settings import Config
-from yoda.stack import AllocationStack, build_stack
+from yoda.stack import resolve_features  # noqa: F401 - re-exported for callers
 from yoda.tailvoi.tailvoi_gate import TailVoIGate
 
-GateFactory = Callable[[AllocationStack, np.ndarray], Gate]
-PolicyFactory = Callable[[AllocationStack, np.ndarray, np.ndarray], RiskParamPolicy]
+GateFactory = Callable[[CIOAgent, np.ndarray], Gate]
+PolicyFactory = Callable[[CIOAgent, np.ndarray, np.ndarray], RiskParamPolicy]
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def run_backtest(
     gate_name = "equal_weight"
 
     for fold in generate_folds(panel, config):
-        stack = build_stack(
+        cio = build_cio(
             panel,
             config,
             fold.train,
@@ -99,15 +100,16 @@ def run_backtest(
             optimizer,
         )
         if fit_gate is not None:
-            stack.gate = fit_gate(stack, fold.train)
-        gate_name = getattr(stack.gate, "name", type(stack.gate).__name__)
-        policy = make_policy(stack, fold.train, fold.val)
+            cio.gate = fit_gate(cio, fold.train)
+        gate_name = getattr(cio.gate, "name", type(cio.gate).__name__)
+        # The policy is trained against the CIO, then seated inside it.
+        cio.install_policy(make_policy(cio, fold.train, fold.val))
 
-        weights = stack.equal_weight_book()
+        weights = cio.equal_weight_book()
         stats: dict = {}
         gate_weights: dict[str, float] = {}
         delta_hat: dict[str, float] = {}
-        params = policy.act(stack.state(int(fold.test[0]), weights)[0])
+        params = cio.policy.act(cio.state(int(fold.test[0]), weights)[0])
         value = 1.0
         last = len(panel.dates) - 1
         for step, position in enumerate(fold.test):
@@ -116,15 +118,16 @@ def run_backtest(
             rebalance = step % backtest.rebalance_days == 0
             previous = weights
             if rebalance:
-                state, scen, gate = stack.state(position, previous)
-                params = policy.act(state)
-                weights = stack.allocate(state, scen, params)
-                stats = state.tail_stats
-                gate_weights = gate.g
-                delta_hat = gate.delta_hat
+                # One call, one decision site: the CIO gates, prices the
+                # dependence, picks the risk stance and solves.
+                decision = cio.decide(position, previous)
+                weights, params = decision.weights, decision.risk
+                stats = decision.state.tail_stats
+                gate_weights = decision.gate.g
+                delta_hat = decision.gate.delta_hat
             turnover = float(np.abs(weights - previous).sum())
             cost = turnover * backtest.cost_bps / 1e4
-            realized = panel.returns[position + 1][stack.universe]
+            realized = panel.returns[position + 1][cio.universe]
             port_return = float(weights @ realized) - cost
             value *= 1.0 + port_return
 
@@ -161,7 +164,7 @@ def run_backtest(
                     "weight_change": float(weight - before),
                 }
                 for asset, weight, before in zip(
-                    np.asarray(panel.assets)[stack.universe],
+                    np.asarray(panel.assets)[cio.universe],
                     weights,
                     previous,
                     strict=True,
@@ -181,19 +184,19 @@ def run_backtest(
         "pipeline": pipeline,
         "label": label or run_id,
         "gate": gate_name,
-        "sources": list(stack.sources),
-        "backends": dict.fromkeys(stack.sources, "openjev"),
+        "sources": list(cio.sources),
+        "backends": dict.fromkeys(cio.sources, "openjev"),
         "synthetic": research.jev.synthetic,
         "news_backend": research.news.backend,
         "target_horizon": research.panel.target_horizon,
-        "policy": getattr(policy, "name", type(policy).__name__),
+        "policy": getattr(cio.policy, "name", type(cio.policy).__name__),
         "alpha": alpha,
         "splits": research.split.ranges,
         "rebalance_days": backtest.rebalance_days,
         "cost_bps": backtest.cost_bps,
         "seed": backtest.seed,
         "config_hash": config_hash(research),
-        "assets": int(stack.n_investable),
+        "assets": int(cio.n_investable),
     }
     return write_run(
         config.path(backtest.runs), run_id, pd.DataFrame(books), ledger, meta

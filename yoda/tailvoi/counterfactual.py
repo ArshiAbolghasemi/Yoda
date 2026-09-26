@@ -72,7 +72,7 @@ def counterfactual_deltas(
 ) -> CounterfactualTargets:
     """Generate ``(state summary, Delta)`` pairs over the training window.
 
-    ``stack`` is any object exposing the :class:`~yoda.pipeline.stack.AllocationStack`
+    ``stack`` is any object exposing the :class:`~yoda.cio.agent.CIOAgent`
     surface: ``gate_at``, ``scenarios``, ``allocate``-style solving, ``universe``
     and ``forward_returns``. It is duck-typed on purpose so this module stays
     independent of the orchestration layer.

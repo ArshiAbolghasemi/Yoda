@@ -19,13 +19,14 @@ from __future__ import annotations
 import numpy as np
 
 from yoda.backtest.engine import run_backtest
+from yoda.cio import CIOAgent
 from yoda.common.alignment import AlignedPanel, build_panel
 from yoda.common.logger import logger
 from yoda.common.types import DROCVaROptimizer
 from yoda.config.settings import Config
 from yoda.evaluation.report import Evaluation, evaluate
 from yoda.rl.sac import train_sac
-from yoda.stack import AllocationStack, fit_gate
+from yoda.stack import fit_gate
 
 PIPELINE = "tail_voli_risk_rl"
 
@@ -45,11 +46,11 @@ def run_tail_voli_risk_rl(
     panel = panel or build_panel(config)
     research = config.research
 
-    def make_policy(stack: AllocationStack, train: np.ndarray, val: np.ndarray):
+    def make_policy(cio: CIOAgent, train: np.ndarray, val: np.ndarray):
         # The seam: train SAC on train+val with the stack frozen, then wrap it.
         rows = np.concatenate([train, val])
         return train_sac(
-            stack,
+            cio,
             rows,
             research.rl,
             rebalance_days=research.backtest.rebalance_days,

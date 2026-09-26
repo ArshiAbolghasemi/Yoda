@@ -22,7 +22,7 @@ params = policy.act(state)  # ② the seam → (λ, B, c)
 weights = stack.allocate(state, scen, params)  # ③ solve
 ```
 
-**① Observe** (`AllocationStack.state`):
+**① Observe** (`CIOAgent.state`):
 
 1. `specialist_output(position)` — each specialist encodes and predicts on that
    date's features, restricted to the fold's universe.
@@ -206,7 +206,7 @@ For a live book, the same three calls are all you need:
 
 ```python
 panel = build_panel(config)  # refresh the dataset first
-stack = build_stack(panel, config, train_rows, gate)
+cio = build_cio(panel, config, train_rows, gate)
 policy = StaticRiskPolicy(...)  # or RLRiskPolicy.load(checkpoint, ...)
 
 today = len(panel.dates) - 1

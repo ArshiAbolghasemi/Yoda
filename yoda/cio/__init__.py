@@ -1,4 +1,4 @@
-"""The CIO: Tail-VoI gate + risk policy + DRO-CVaR, returning portfolio weights."""
+"""The CIO: the single decision-maker every specialist reports to."""
 
 from yoda.cio.agent import CIOAgent, CIODecision, build_cio
 

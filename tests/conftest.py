@@ -58,12 +58,17 @@ def train_rows(panel, config):
 
 @pytest.fixture(scope="session")
 def stack(panel, config, train_rows):
-    from yoda.stack import build_stack
+    """A CIO with no policy seated yet - everything below the seam.
+
+    Named ``stack`` because that is what the counterfactual generator and the
+    RL environment consume: the CIO minus its decision.
+    """
+    from yoda.cio import build_cio
     from yoda.tailvoi.tailvoi_gate import TailVoIGate
 
-    # Unfitted: degrades to an even gate, which is what the counterfactual
+    # Unfitted gate: degrades to an even gate, which is what the counterfactual
     # generator sees while it builds the targets.
-    return build_stack(panel, config, train_rows, TailVoIGate(config.research.tailvoi))
+    return build_cio(panel, config, train_rows, TailVoIGate(config.research.tailvoi))
 
 
 @pytest.fixture

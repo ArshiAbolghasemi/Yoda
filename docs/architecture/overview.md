@@ -131,12 +131,12 @@ Specialists, gate, copula and optimizer each have their own page — see
 `yoda/stack.py`:
 
 ```python
-stack = build_stack(panel, config, train_rows, gate)  # fits on train_rows only
+cio = build_cio(panel, config, train_rows, gate)  # fits on train_rows only
 state, scen, gate_out = stack.state(position, w_prev)  # one date → observation
 weights = stack.allocate(state, scen, risk_params)  # → simplex weights
 ```
 
-`AllocationStack` is the whole system below the seam behind four methods. The
+`CIOAgent` is the whole system below the seam behind four methods. The
 backtest engine, the counterfactual generator and the RL environment all drive it
 through the same surface, which is why none of them can disagree about what the
 model saw on a given day.
@@ -145,7 +145,7 @@ model saw on a given day.
 
 This is enforced structurally, not by convention:
 
-- **Fitting** takes explicit row indices. `build_stack(panel, config, train_rows, …)`
+- **Fitting** takes explicit row indices. `build_cio(panel, config, train_rows, …)`
   cannot see anything else; the walk-forward split lives in the *caller*, in one
   place (`generate_folds`).
 - **Targets are labels.** `future_return_Nd` is recomputed from aligned prices and
