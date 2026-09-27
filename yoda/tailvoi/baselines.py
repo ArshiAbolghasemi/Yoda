@@ -22,6 +22,7 @@ import torch
 from scipy import stats
 from torch import nn
 
+from yoda.common.device import resolve_device
 from yoda.common.logger import logger
 from yoda.common.types import Gate, GateOutput, SpecialistOutput
 from yoda.tailvoi.base import MU_SOURCES, fuse, softmax, summarise
@@ -91,6 +92,7 @@ class AttentionGate(Gate):
 
     def __init__(self, seed: int = 13, epochs: int = 300, lr: float = 1e-2):
         self.seed, self.epochs, self.lr = seed, epochs, lr
+        self.device = resolve_device()
         self.sources: tuple[str, ...] = ()
         self.model: _Attention | None = None
 
@@ -105,16 +107,13 @@ class AttentionGate(Gate):
         torch.manual_seed(self.seed)
         self.sources = sources
         width = summaries.shape[1] // len(sources)
-        chunks = torch.tensor(
-            summaries.reshape(len(summaries), len(sources), width), dtype=torch.float32
-        )
-        views = torch.tensor(np.nan_to_num(mu_stack), dtype=torch.float32)
-        truth = torch.tensor(np.nan_to_num(realized), dtype=torch.float32)
-        directional = torch.tensor(
-            [1.0 if name in MU_SOURCES else 0.0 for name in sources]
-        )
+        tensor = lambda x: torch.tensor(x, dtype=torch.float32, device=self.device)  # noqa: E731
+        chunks = tensor(summaries.reshape(len(summaries), len(sources), width))
+        views = tensor(np.nan_to_num(mu_stack))
+        truth = tensor(np.nan_to_num(realized))
+        directional = tensor([1.0 if name in MU_SOURCES else 0.0 for name in sources])
 
-        self.model = _Attention(width)
+        self.model = _Attention(width).to(self.device)
         optimiser = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         for _ in range(self.epochs):
             optimiser.zero_grad()
@@ -125,7 +124,10 @@ class AttentionGate(Gate):
             loss.backward()
             optimiser.step()
         logger.info(
-            "attention_gate_fitted states=%d loss=%.3e", len(summaries), loss.item()
+            "attention_gate_fitted states=%d loss=%.3e device=%s",
+            len(summaries),
+            loss.item(),
+            self.device,
         )
 
     def gate(self, spec: SpecialistOutput) -> GateOutput:
@@ -137,8 +139,10 @@ class AttentionGate(Gate):
         summary = summarise(spec, sources)
         width = len(summary) // len(sources)
         chunks = torch.tensor(
-            summary.reshape(1, len(sources), width), dtype=torch.float32
+            summary.reshape(1, len(sources), width),
+            dtype=torch.float32,
+            device=self.device,
         )
         with torch.no_grad():
-            g = self.model(chunks).numpy().reshape(-1)
+            g = self.model(chunks).cpu().numpy().reshape(-1)
         return fuse(spec, dict(zip(sources, g, strict=True)))

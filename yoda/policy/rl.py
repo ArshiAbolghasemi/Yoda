@@ -57,5 +57,10 @@ class RLRiskPolicy(RiskParamPolicy):
         observation = (
             state.observation(self.sources) if self.sources else state.observation()
         )
+        # float32 to match the env's observation_space. MarketState builds
+        # float64, and Apple MPS refuses to convert it - the env casts on
+        # reset/step, so without this the policy works while training and
+        # fails the first time it is asked for a decision.
+        observation = np.asarray(observation, dtype=np.float32)
         action, _ = self.model.predict(observation, deterministic=True)
         return action_to_params(action, self.config, self.alpha)

@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 from stable_baselines3 import SAC
 
+from yoda.common.device import resolve_device
 from yoda.common.logger import logger
 from yoda.config.research import RLConfig
 from yoda.policy.rl import RLRiskPolicy
@@ -40,9 +41,17 @@ def train_sac(
         buffer_size=config.buffer_size,
         learning_starts=config.learning_starts,
         seed=config.seed,
+        # Explicit rather than SB3's "auto", which only ever considers CUDA
+        # and would silently ignore Metal on a Mac.
+        device=str(resolve_device()),
         verbose=0,
     )
-    logger.info("sac_train_start steps=%d rows=%d", config.total_timesteps, len(rows))
+    logger.info(
+        "sac_train_start steps=%d rows=%d device=%s",
+        config.total_timesteps,
+        len(rows),
+        resolve_device(),
+    )
     model.learn(total_timesteps=config.total_timesteps, progress_bar=False)
 
     if config.synthetic_episodes > 0:

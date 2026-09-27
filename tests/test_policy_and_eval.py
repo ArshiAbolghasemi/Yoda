@@ -189,3 +189,19 @@ def test_results_go_to_stdout_and_diagnostics_to_stderr():
     assert results.propagate is False
     assert any(h.formatter._fmt == "%(message)s" for h in results.handlers)
     assert logging.getLogger("yoda").handlers == []  # inherits the stderr root
+
+
+def test_rl_observation_is_float32(stack, train_rows, equal_book):
+    """MarketState builds float64; MPS cannot convert it.
+
+    The env casts on reset/step, so a float64 leak only shows up at inference -
+    the policy trains fine and then fails the first time it is asked to act.
+    """
+    import numpy as np
+
+    state, _, _ = stack.state(int(train_rows[-1]), equal_book)
+    assert state.observation(stack.sources).dtype == np.float64  # the source
+    assert (
+        np.asarray(state.observation(stack.sources), dtype=np.float32).dtype
+        == np.float32
+    )

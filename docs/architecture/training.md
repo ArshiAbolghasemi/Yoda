@@ -12,6 +12,29 @@ Both accept `--gate tailvoi|accuracy|attention|equal_weight` (default:
 `TAILVOI__GATE`) and `--run-id NAME`. The risk policy is what the two scripts
 differ in.
 
+## Where it runs
+
+The torch device is **resolved from the hardware**, not configured:
+`cuda` > `mps` > `cpu`, decided once per process and cached so the gate and the
+RL controller cannot land on different devices in the same run.
+
+| Component | Library | Device |
+|---|---|---|
+| Tail-VoI gate | sklearn `MLPRegressor` | CPU — sklearn has no GPU backend |
+| Attention gate (control) | torch | resolved |
+| SAC controller | stable-baselines3 | resolved |
+| Specialist heads, copula, DRO-CVaR | sklearn / numpy / cvxpy | CPU |
+
+Explicit rather than Stable-Baselines3's `"auto"`, which only ever considers
+CUDA and would ignore Metal on a Mac.
+
+**No training stage requires an accelerator.** The GPU in this project serves
+OpenJev in phase 0; once `data/processed/jev/*.parquet` exists everything below
+runs on a laptop. Each RL step is a cvxpy solve, which is CPU-bound whatever
+the policy network sits on, so expect the device to change little — picking up
+an accelerator when one is present is the least surprising behaviour, not a
+performance claim.
+
 ## Before you start
 
 ```bash
