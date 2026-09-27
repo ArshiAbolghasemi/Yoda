@@ -43,12 +43,16 @@ class PanelConfig:
 class SplitConfig:
     """Contiguous, non-overlapping walk-forward boundaries."""
 
-    train_start: str = "2017-01-01"
-    train_end: str = "2022-12-31"
-    val_start: str = "2023-01-01"
-    val_end: str = "2023-12-31"
-    test_start: str = "2024-01-01"
-    test_end: str = "2026-09-18"
+    # The panel begins 2018-01-02: PANEL__MIN_HISTORY drops each asset's first
+    # 250 rows as indicator warm-up, so a 2017 start selects nothing.
+    train_start: str = "2018-01-01"
+    train_end: str = "2019-09-30"
+    val_start: str = "2019-10-01"
+    val_end: str = "2019-12-31"
+    # COVID crash, recovery and the 2021 bull: the regimes a tail-risk claim
+    # has to be tested on. 2022-2026 is left untouched as a second holdout.
+    test_start: str = "2020-01-01"
+    test_end: str = "2021-12-31"
     refit_days: int = 0  # 0 => single fold; >0 => rolling refit stride
 
     def __post_init__(self) -> None:

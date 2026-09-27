@@ -36,12 +36,9 @@ VLLM_PORT="${VLLM_PORT:-8000}"
 SHIM_PORT="${SHIM_PORT:-3000}"
 SERVED_NAME="${SERVED_NAME:-qwen}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
-# Size the KV cache directly, in bytes. vLLM prints the two numbers worth using
-# on the first boot of a given model/GPU pair: one that fits the current
-# gpu-memory-utilization, one that fills the card. Set this and the fraction
-# stops mattering - the cache no longer shrinks when weights or CUDA graphs
-# grow, so throughput is reproducible across vLLM upgrades.
-KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"
+# Fragmentation hurts here: the KV cache is one enormous contiguous buffer and
+# the weights are allocated just before it.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 LOGS=./logs
 PIDS=./run
@@ -199,12 +196,21 @@ wait_for() { # name url timeout
 
 start_vllm() {
   alive vllm && { say "vLLM already running (pid $(cat $PIDS/vllm.pid))"; return; }
+  # The KV cache is sized by profiling, never pinned. --kv-cache-memory makes
+  # vLLM *skip* profiling and trust the number, and the number is only valid
+  # for the exact weights, quantization path, GPU and vLLM build that printed
+  # it. Change the fp8 kernel and the weights grow; the stale pin then asks for
+  # more than is free and the engine OOMs at startup rather than shrinking:
+  #
+  #   reserved 53.83 GiB ... skipped memory profiling
+  #   Tried to allocate 53.79 GiB ... 49.79 GiB is free
+  #
+  # Profiling measures what is left *after* the weights are resident, which is
+  # the one thing a static byte count cannot track. Tune the fraction instead.
   local mem=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
-  if [ -n "$KV_CACHE_MEMORY" ]; then
-    mem=(--kv-cache-memory "$KV_CACHE_MEMORY")
-    say "starting vLLM on :$VLLM_PORT (kv cache $((KV_CACHE_MEMORY / 1073741824)) GiB)"
-  else
-    say "starting vLLM on :$VLLM_PORT (gpu-memory-utilization $GPU_MEMORY_UTILIZATION)"
+  say "starting vLLM on :$VLLM_PORT (gpu-memory-utilization $GPU_MEMORY_UTILIZATION)"
+  if [ -n "${KV_CACHE_MEMORY:-}" ]; then
+    say "ignoring KV_CACHE_MEMORY=$KV_CACHE_MEMORY - the cache is profiled, not pinned"
   fi
   nohup uv run --no-sync --active vllm serve "$MODEL_DIR" \
     --host "$HOST" --port "$VLLM_PORT" --served-model-name "$SERVED_NAME" \

@@ -150,7 +150,7 @@ Both paths use the serving configuration published on the model card:
 | prefix caching | enabled |
 | max model length | 16384 |
 | max concurrent sequences | 256 |
-| KV cache | `KV_CACHE_MEMORY` bytes, else `--gpu-memory-utilization` |
+| KV cache | profiled from `--gpu-memory-utilization` (never pinned) |
 | max logprobs | 64 |
 | prefill backend | `--gdn-prefill-backend triton` |
 | pinned versions | `vllm==0.29.0` (in the `cu130` extra), `openai==3.16.2`, `httpx==0.28.1` |
@@ -194,30 +194,31 @@ runs on tensor cores or through Marlin.
 
 ### Sizing the KV cache
 
-By default vLLM derives the cache from `--gpu-memory-utilization`: whatever is
-left after weights, activation peak and CUDA graphs. That remainder moves when
-any of those three do, so the same fraction gives a different cache after a vLLM
-or model update — and throughput changes with it for no visible reason.
+vLLM profiles it: after the weights are resident it measures what is free and
+takes `--gpu-memory-utilization` of the card. `serve.sh` passes the fraction and
+nothing else.
 
-vLLM prints the two numbers worth pinning on the first boot of a given
-model/GPU pair:
+**It is deliberately not pinned.** `--kv-cache-memory` makes vLLM *skip*
+profiling and trust the byte count, and that count is only valid for the exact
+weights, quantization path, GPU and vLLM build that printed it. Pin it, then
+change the FP8 kernel — native to Marlin, say — and the weights grow while the
+pin does not, so the engine asks for more than exists and dies at startup
+instead of shrinking:
 
 ```
-Replace gpu_memory_utilization config with `--kv-cache-memory=57794628301`
-(53.83 GiB) to fit into requested memory, or `--kv-cache-memory=67405561344`
-(62.78 GiB) to fully utilize gpu memory.
+reserved 53.83 GiB ... and skipped memory profiling
+Tried to allocate 53.79 GiB. GPU has 79.25 GiB of which 49.79 GiB is free.
+this process has 29.45 GiB memory in use
 ```
 
-Put the one you want in the root `.env` and `serve.sh` passes it instead of the
-fraction:
+29.45 GiB of weights plus a 53.79 GiB pin is 83 GiB on an 80 GiB card.
+Profiling is the only thing that tracks the weights' actual footprint, so
+`KV_CACHE_MEMORY` is ignored if set; tune `GPU_MEMORY_UTILIZATION` instead
+(0.95 for more cache, lower for headroom).
 
-```bash
-KV_CACHE_MEMORY=67405561344     # A100 80GB, OpenJev fp8, max-model-len 16384
-```
-
-The number is specific to the GPU, the quantisation and the context length —
-read it off your own boot log rather than copying one. Leave it empty to go back
-to the fraction.
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is exported by default: the
+cache is one enormous contiguous buffer allocated right after the weights, so
+fragmentation is worth avoiding.
 
 ### Readout calibration
 
