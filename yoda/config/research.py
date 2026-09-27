@@ -126,6 +126,9 @@ class JevConfig:
     news_history_max: int = 40
     timeout: float = 120.0
     max_retries: int = 4  # handled by the SDK's RetryPolicy, not by tenacity
+    # Endpoint cap: "limited to 2000 requests per minute". Paced client-side so
+    # the thread pool does not burst past it; 0 disables the limiter.
+    requests_per_minute: int = 2000
     temperature: float = 0.0  # deterministic: the same state must give the same view
     max_tokens: int = 1200  # enough for the structured view, not for an essay
     cache: str = "processed/jev"  # one parquet per channel

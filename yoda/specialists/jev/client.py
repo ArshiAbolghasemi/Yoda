@@ -20,6 +20,8 @@ The endpoint lives in configuration (``JEV__BASE_URL``, ``JEV__API_KEY``,
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Mapping
 
 from typesafe_sdk import (
@@ -55,6 +57,41 @@ def retry_policy(config: JevConfig) -> RetryPolicy:
     )
 
 
+class RateLimiter:
+    """Evenly paced client-side cap, shared across the worker threads.
+
+    The endpoint allows a fixed number of requests per minute::
+
+        limited to 2000 requests per minute. Please retry shortly
+
+    The feature build runs a thread pool, so without a cap ``max_concurrency``
+    workers times a sub-second round trip sails past that and the whole pool
+    starts collecting 429s at once - the retries then arrive together and the
+    burst repeats.
+
+    Pacing rather than bursting: each caller reserves the next slot, so the
+    issue rate is the limit rather than the limit on average. The reservation
+    is taken under the lock and the sleep happens outside it, so threads wait
+    on the clock instead of on each other.
+    """
+
+    def __init__(self, per_minute: int):
+        self.interval = 60.0 / per_minute if per_minute > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        if self.interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next)
+            self._next = slot + self.interval
+        delay = slot - now
+        if delay > 0:
+            time.sleep(delay)
+
+
 class JevClient:
     """One client per feature build; safe to share across worker threads."""
 
@@ -66,6 +103,7 @@ class JevClient:
             timeout=config.timeout,
             retry=retry_policy(config),
         )
+        self.limiter = RateLimiter(config.requests_per_minute)
         self.calls = 0
 
     def close(self) -> None:
@@ -81,6 +119,7 @@ class JevClient:
         self, state: JSONContent, questions: Mapping[str, Question]
     ) -> SystemOneResponse:
         """One state, every question for that specialist, one request."""
+        self.limiter.acquire()
         response = self.client.system_one(
             state=state,
             questions=questions,
