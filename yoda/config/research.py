@@ -125,6 +125,7 @@ class JevConfig:
     # the most recent are kept, oldest dropped first.
     news_history_max: int = 40
     timeout: float = 120.0
+    max_retries: int = 4  # handled by the SDK's RetryPolicy, not by tenacity
     temperature: float = 0.0  # deterministic: the same state must give the same view
     max_tokens: int = 1200  # enough for the structured view, not for an essay
     cache: str = "processed/jev"  # one parquet per channel

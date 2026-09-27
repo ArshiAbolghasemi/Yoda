@@ -170,3 +170,6 @@ select = ["E", "F", "I", "UP", "B"]
 # The agent prompts are stored verbatim; reflowing them would change what the
 # model is asked, and the prompt text is part of the cache key.
 "yoda/specialists/prompts/agents.py" = ["E501"]
+# The question text reads as prose; wrapping it mid-sentence hides what is
+# actually being asked, and the text is part of the cache key.
+"yoda/specialists/prompts/questions.py" = ["E501"]

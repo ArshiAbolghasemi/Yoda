@@ -15,7 +15,6 @@ Backtesting consumes the frozen table and never calls OpenJev online.
 
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,7 +29,7 @@ from yoda.specialists.jev.cache import JevCache, cache_key
 from yoda.specialists.jev.client import JevClient, resolve_model
 from yoda.specialists.jev.questions import CHANNELS, InferenceStatus, neutral
 from yoda.specialists.jev.states import build_state_frame
-from yoda.specialists.prompts import PROMPTS, VIEWS
+from yoda.specialists.prompts.questions import build_questions, decode
 
 NEWS_COUNT_SCALE = 10.0  # headlines per asset-day are single digits in this panel
 
@@ -215,7 +214,7 @@ def build_jev_features(
     if len(pending) and settings.synthetic:
         _fill_synthetic(cache, pending, spec, channel, settings)
     elif len(pending):
-        _fill_from_model(cache, pending, spec, channel, settings, model)
+        _fill_from_model(cache, pending, spec, channel, settings, model, horizon)
     cache.flush()
 
     joined = cache.table(columns).reindex(states["key"]).reset_index(drop=True)
@@ -255,7 +254,9 @@ def build_jev_features(
     return cube, tuple(columns)
 
 
-def _fill_from_model(cache, pending, spec, channel, settings, model) -> None:
+def _fill_from_model(
+    cache, pending, spec, channel, settings, model, panel_horizon
+) -> None:
     logger.info(
         "jev_start channel=%s rows=%d model=%s prompt=%s",
         channel,
@@ -263,24 +264,26 @@ def _fill_from_model(cache, pending, spec, channel, settings, model) -> None:
         model,
         settings.prompt_version,
     )
+    horizon = panel_horizon
+    questions = build_questions(channel, horizon)
     with JevClient(settings) as client:
-        prompt, schema = PROMPTS[channel], VIEWS[channel]
 
         def ask(row: tuple) -> tuple[str, str, str, dict]:
             key, asset, date, state = row
             try:
-                view = client.view(prompt, state, schema)
+                answers = client.ask(state, questions).answers
+                record = decode(channel, answers, horizon)
             except Exception as error:  # noqa: BLE001 - recorded, not swallowed
                 logger.warning(
-                    "jev_view_failed asset=%s date=%s error=%s", asset, date, error
+                    "jev_ask_failed asset=%s date=%s error=%s", asset, date, error
                 )
                 status = (
                     InferenceStatus.INVALID_RESPONSE
-                    if isinstance(error, (ValueError, TypeError))
+                    if isinstance(error, (KeyError, ValueError, TypeError))
                     else InferenceStatus.RETRY_EXHAUSTED
                 )
                 return key, asset, date, _failed(channel, status)
-            return key, asset, date, _record(view)
+            return key, asset, date, _record(record)
 
         work = list(
             pending[["key", "asset", "date", "state"]].itertuples(
@@ -294,31 +297,18 @@ def _fill_from_model(cache, pending, spec, channel, settings, model) -> None:
                 cache.add(*result)
 
 
-def _record(view) -> dict:
-    """Split the view: numbers feed the gate, prose is kept for the CIO.
+def _record(decoded: dict[str, float]) -> dict:
+    """The decoded answers, stamped OK.
 
-    ``view_summary`` and the evidence lists never reach the numeric path - they
-    are the semantic message, and the gate must not be able to key off free
-    text it cannot calibrate.
+    A decisions model returns numbers and probabilities, not prose, so the
+    ``view_summary`` / ``narrative`` columns the generative path used to fill
+    are empty. The gate could never key off them anyway - they were kept for
+    the ledger, and the answer probabilities are a better audit trail.
     """
-    numeric = {
-        name: float(value)
-        for name, value in view.model_dump().items()
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-    }
-    numeric.update(view.core())
     return {
-        **numeric,
-        "view_summary": view.view_summary,
-        "narrative": json.dumps(
-            {
-                "evidence": getattr(view, "key_evidence", None)
-                or getattr(view, "key_signals", None)
-                or getattr(view, "key_risk_drivers", None)
-                or [],
-                "scenarios": [s.model_dump() for s in view.risk_scenarios],
-            }
-        ),
+        **{name: float(value) for name, value in decoded.items()},
+        "view_summary": "",
+        "narrative": "{}",
         "inference_status": InferenceStatus.OK,
     }
 

@@ -1,9 +1,18 @@
-"""Access to the locally served OpenJev decision API.
+"""Access to the OpenJev decision API.
 
-Thin wrapper over ``typesafe_sdk``, which is the protocol the OpenJev shim
-speaks: ``POST /v1/systemone`` with ``model``, ``state`` and ``questions``. It
-returns the raw ``SystemOneResponse`` so the caller keeps the calibrated
-probabilities rather than a thresholded point estimate.
+Thin wrapper over ``typesafe_sdk``, which is the protocol OpenJev speaks:
+``POST /v1/systemone`` with ``model``, ``state`` and ``questions``. It returns
+the raw ``SystemOneResponse`` so the caller keeps the calibrated probabilities
+rather than a thresholded point estimate.
+
+**There is no generative path.** ``jev-1.13`` is a decisions model and rejects
+``/v1/chat/completions`` outright::
+
+    400 - jev-1.13 is a decisions model and cannot be used with the
+          chat/completions endpoint.
+
+Which is the right constraint to be held to: a JSON blob of self-assessed
+numbers is not the thing the calibration metrics are supposed to measure.
 
 The endpoint lives in configuration (``JEV__BASE_URL``, ``JEV__API_KEY``,
 ``JEV__MODEL``) and never in a specialist implementation.
@@ -11,40 +20,39 @@ The endpoint lives in configuration (``JEV__BASE_URL``, ``JEV__API_KEY``,
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 
-from openai import OpenAI
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 from typesafe_sdk import (
     JSONContent,
     Noul,
     Question,
+    RetryPolicy,
     SystemOneResponse,
-    TypeSafeAPIConnectionError,
-    TypeSafeAPITimeoutError,
     TypeSafeClient,
-    TypeSafeInternalServerError,
-    TypeSafeRateLimitError,
 )
 
 from yoda.common.logger import logger
 from yoda.config.research import JevConfig
-from yoda.specialists.prompts.schema import AgentView
 
-TRANSIENT = (
-    TypeSafeRateLimitError,
-    TypeSafeAPITimeoutError,
-    TypeSafeAPIConnectionError,
-    TypeSafeInternalServerError,
-)
 UNRESOLVED = "unresolved"
 _PING = Noul(instructions="Is this a test?")
+
+
+def retry_policy(config: JevConfig) -> RetryPolicy:
+    """The SDK's own retry, rather than tenacity around it.
+
+    It backs off with jitter *and* honours ``Retry-After``, which a wrapper
+    cannot do because it never sees the response header. Stacking tenacity on
+    top would multiply the attempts rather than add to them - three outer
+    tries over three inner ones is nine requests per failure.
+    """
+    return RetryPolicy(
+        max_retries=config.max_retries,
+        backoff_initial=0.5,
+        backoff_max=20.0,
+        backoff_jitter=0.5,
+        respect_retry_after=True,
+    )
 
 
 class JevClient:
@@ -56,17 +64,9 @@ class JevClient:
             api_key=config.api_key or "x",
             base_url=config.base_url or None,
             timeout=config.timeout,
+            retry=retry_policy(config),
         )
         self.calls = 0
-
-        # The shim proxies /v1/chat/completions through to vLLM, which is how
-        # the agent prompts are served. Decision questions and generation share
-        # one endpoint and one set of credentials.
-        self.chat = OpenAI(
-            base_url=f"{(config.base_url or '').rstrip('/')}/v1",
-            api_key=config.api_key or "x",
-            timeout=config.timeout,
-        )
 
     def close(self) -> None:
         self.client.close()
@@ -77,12 +77,6 @@ class JevClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    @retry(
-        retry=retry_if_exception_type(TRANSIENT),
-        stop=stop_after_attempt(4),
-        wait=wait_exponential(min=1, max=20),
-        reraise=True,
-    )
     def ask(
         self, state: JSONContent, questions: Mapping[str, Question]
     ) -> SystemOneResponse:
@@ -94,37 +88,6 @@ class JevClient:
         )
         self.calls += 1
         return response
-
-    @retry(
-        retry=retry_if_exception_type(Exception),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(min=1, max=15),
-        reraise=True,
-    )
-    def view(self, prompt: str, state: dict, schema: type[AgentView]) -> AgentView:
-        """Run an agent prompt and validate the JSON it returns.
-
-        The prompts ask for a strict JSON object and nothing else. A response
-        that will not parse or will not validate raises, so the caller records
-        an explicit ``inference_status`` instead of quietly accepting a
-        malformed view.
-        """
-        response = self.chat.chat.completions.create(
-            model=self.config.model or "qwen",
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(state, sort_keys=True)},
-            ],
-        )
-        self.calls += 1
-        text = response.choices[0].message.content or ""
-        start, end = text.find("{"), text.rfind("}")
-        if not 0 <= start < end:
-            raise ValueError("agent returned no JSON object")
-        return schema.model_validate(json.loads(text[start : end + 1]))
 
 
 def resolve_model(config: JevConfig) -> str:
