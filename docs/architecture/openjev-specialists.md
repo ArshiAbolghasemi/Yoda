@@ -233,15 +233,36 @@ treat them as part of the model, not as tuning knobs.
 
 ### Pointing the research stack at it
 
+Two endpoints serve the same agents. The default is hosted:
+
 ```dotenv
-JEV__BASE_URL=http://127.0.0.1:3000   # API root - the SDK appends /v1/systemone
-JEV__API_KEY=                 # the shim's SHIM_TOKEN, if you set one
-JEV__MODEL=                   # pin a version; empty records what the shim reports
+JEV__BASE_URL=https://openrouter.ai/api   # API root; the chat client appends /v1
+JEV__API_KEY=sk-or-v1-...                 # OpenRouter key
+JEV__MODEL=jev-1.13                       # pinned - part of the cache key
 JEV__PROMPT_VERSION=v1
-JEV__MAX_CONCURRENCY=8
+JEV__MAX_CONCURRENCY=64
 JEV__TIMEOUT=120
 JEV__CACHE=processed/jev
 ```
+
+Self-hosted, via `llm-serve/serve.sh`, is the same block with:
+
+```dotenv
+JEV__BASE_URL=http://127.0.0.1:3000       # the shim; SHIM_TOKEN as the key
+```
+
+| | hosted (OpenRouter) | self-hosted (shim + vLLM) |
+|---|---|---|
+| `/v1/chat/completions` — the agent prompts | ✅ | ✅ |
+| `/v1/systemone` — calibrated decisions | ❌ | ✅ |
+| Prefix caching on the ~900-token system prompt | billed every call | reused |
+| Cost of one full pass | ~$6–10 | GPU time |
+
+**The model must stay pinned when hosted.** With `JEV__MODEL` empty,
+`resolve_model()` probes the endpoint for its default through
+`/v1/systemone` — which only the shim implements — and records `"unresolved"`
+in every cache key. Pinning also stops a provider-side model rotation from
+mixing two populations into one table.
 
 Nothing about the endpoint appears in a specialist implementation.
 

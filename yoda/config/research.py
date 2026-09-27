@@ -105,9 +105,14 @@ class JevConfig:
     TypeSafe API instead is a ``.env`` change and nothing else.
     """
 
-    api_key: str = "x"  # the shim's SHIM_TOKEN; any value when it is unset
-    base_url: str = "http://127.0.0.1:3000"  # API root; the SDK adds /v1/systemone
-    model: str = ""  # pin a version; empty records whatever the shim reports
+    api_key: str = "x"  # OpenRouter key, or the shim's SHIM_TOKEN when local
+    # API root. The generation client appends /v1, the TypeSafe SDK appends
+    # /v1/systemone - the latter exists only on the local shim.
+    base_url: str = "https://openrouter.ai/api"
+    # Pinned, not probed: an empty value makes resolve_model() ask the endpoint
+    # for its default, which only the shim answers. The pin is part of the
+    # cache key, so a model rotation cannot silently mix two populations.
+    model: str = "jev-1.13"
     prompt_version: str = "v1"  # part of the cache key
     max_concurrency: int = 8
     # Trading days of prior headlines sent alongside the current day's. The
